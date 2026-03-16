@@ -1,0 +1,221 @@
+#!/bin/bash
+
+# =============================================================================
+# 03-nginx-setup.sh
+# Nginx Reverse Proxy + Certbot SSL Setup
+# =============================================================================
+#
+# PURPOSE:
+#   Install nginx with secure defaults and certbot for automatic SSL
+#   certificates. Creates reusable config snippets (security headers,
+#   proxy params) that the deploy script will use.
+#
+# DEPENDENCIES:
+#   None — but should be run before 04-deploy-app.sh.
+#
+# NEXT STEP:
+#   Run 04-deploy-app.sh to deploy your first Dockerized app.
+#
+# USAGE:
+#   sudo bash 03-nginx-setup.sh
+#
+# SAFE TO RE-RUN:
+#   Yes — detects existing nginx and asks before reconfiguring.
+#
+# =============================================================================
+
+set -euo pipefail
+
+# --- Colors & Logging (self-contained) ---
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+log()     { echo -e "${GREEN}[OK]${NC} $1"; }
+warn()    { echo -e "${YELLOW}[!!]${NC} $1"; }
+error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
+section() { echo -e "\n${BLUE}══════════════════════════════════════${NC}\n${BLUE}  $1${NC}\n${BLUE}══════════════════════════════════════${NC}\n"; }
+
+# =============================================================================
+# PRE-FLIGHT CHECKS
+# =============================================================================
+
+[ "$EUID" -ne 0 ] && error "This script must be run as root. Use: sudo bash 03-nginx-setup.sh"
+
+# =============================================================================
+# WELCOME BANNER
+# =============================================================================
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}  NGINX + CERTBOT SETUP SCRIPT${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "  This script will:"
+echo "    1. Install nginx and certbot"
+echo "    2. Configure secure defaults"
+echo "    3. Create reusable security headers snippet"
+echo "    4. Create reusable proxy params snippet"
+echo "    5. Remove the default nginx site"
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+read -p "Ready to begin? (y/n): " START_CONFIRM
+[ "$START_CONFIRM" != "y" ] && echo "Aborted." && exit 0
+
+# =============================================================================
+# INSTALL NGINX + CERTBOT
+# =============================================================================
+section "Step 1/4 — Installing Nginx + Certbot"
+
+if command -v nginx &>/dev/null; then
+  CURRENT_NGINX=$(nginx -v 2>&1)
+  warn "Nginx is already installed: $CURRENT_NGINX"
+  read -p "Reinstall nginx? (y/n): " REINSTALL_NGINX
+  if [ "$REINSTALL_NGINX" != "y" ]; then
+    log "Skipping nginx installation."
+    SKIP_NGINX_INSTALL=true
+  else
+    SKIP_NGINX_INSTALL=false
+  fi
+else
+  SKIP_NGINX_INSTALL=false
+fi
+
+if [ "$SKIP_NGINX_INSTALL" = false ]; then
+  echo "Installing nginx, certbot, and certbot nginx plugin..."
+  export DEBIAN_FRONTEND=noninteractive
+  apt update -y
+  apt install -y nginx certbot python3-certbot-nginx
+  log "Nginx and certbot installed."
+fi
+
+# =============================================================================
+# SECURE DEFAULTS
+# =============================================================================
+section "Step 2/4 — Configuring Secure Defaults"
+
+NGINX_CONF="/etc/nginx/nginx.conf"
+
+if grep -q "server_tokens off;" "$NGINX_CONF" 2>/dev/null; then
+  log "Nginx version is already hidden (server_tokens off)."
+else
+  echo "Hiding nginx version number..."
+  sed -i 's/# server_tokens off;/server_tokens off;/' "$NGINX_CONF"
+  # If the commented line wasn't found, add it in the http block
+  if ! grep -q "server_tokens off;" "$NGINX_CONF"; then
+    sed -i '/http {/a \\tserver_tokens off;' "$NGINX_CONF"
+  fi
+  log "Nginx version hidden (server_tokens off)."
+fi
+
+# =============================================================================
+# SECURITY HEADERS SNIPPET
+# =============================================================================
+section "Step 3/4 — Creating Reusable Config Snippets"
+
+HEADERS_SNIPPET="/etc/nginx/snippets/security-headers.conf"
+
+if [ -f "$HEADERS_SNIPPET" ]; then
+  warn "Security headers snippet already exists."
+  read -p "Overwrite? (y/n): " RECONFIG_HEADERS
+else
+  RECONFIG_HEADERS="y"
+fi
+
+if [ "${RECONFIG_HEADERS:-y}" = "y" ]; then
+  mkdir -p /etc/nginx/snippets
+  cat > "$HEADERS_SNIPPET" << 'EOF'
+# Security Headers — generated by 03-nginx-setup.sh
+# Include this in your server blocks: include snippets/security-headers.conf;
+
+add_header X-Frame-Options "SAMEORIGIN" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';" always;
+EOF
+
+  log "Security headers snippet created at $HEADERS_SNIPPET"
+fi
+
+# --- Proxy Params Snippet ---
+PROXY_SNIPPET="/etc/nginx/snippets/proxy-params.conf"
+
+if [ -f "$PROXY_SNIPPET" ]; then
+  warn "Proxy params snippet already exists."
+  read -p "Overwrite? (y/n): " RECONFIG_PROXY
+else
+  RECONFIG_PROXY="y"
+fi
+
+if [ "${RECONFIG_PROXY:-y}" = "y" ]; then
+  cat > "$PROXY_SNIPPET" << 'EOF'
+# Proxy Parameters — generated by 03-nginx-setup.sh
+# Include this in your location blocks: include snippets/proxy-params.conf;
+
+proxy_http_version 1.1;
+proxy_set_header Upgrade $http_upgrade;
+proxy_set_header Connection 'upgrade';
+proxy_set_header Host $host;
+proxy_set_header X-Real-IP $remote_addr;
+proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+proxy_set_header X-Forwarded-Proto $scheme;
+proxy_cache_bypass $http_upgrade;
+proxy_read_timeout 60s;
+proxy_connect_timeout 60s;
+EOF
+
+  log "Proxy params snippet created at $PROXY_SNIPPET"
+fi
+
+# =============================================================================
+# REMOVE DEFAULT SITE & TEST
+# =============================================================================
+section "Step 4/4 — Finalizing Configuration"
+
+# Remove default site
+if [ -L /etc/nginx/sites-enabled/default ] || [ -f /etc/nginx/sites-enabled/default ]; then
+  rm -f /etc/nginx/sites-enabled/default
+  log "Default nginx site removed."
+else
+  log "Default nginx site already removed."
+fi
+
+# Test and reload
+echo "Testing nginx configuration..."
+if nginx -t 2>&1; then
+  systemctl enable nginx > /dev/null 2>&1
+  systemctl reload nginx
+  log "Nginx configuration valid and reloaded."
+else
+  error "Nginx configuration test failed. Check the errors above."
+fi
+
+# =============================================================================
+# DONE
+# =============================================================================
+NGINX_VER=$(nginx -v 2>&1 | awk -F/ '{print $2}')
+CERTBOT_VER=$(certbot --version 2>&1 | awk '{print $2}')
+
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}  NGINX + CERTBOT SETUP COMPLETE${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "  Nginx version    : ${NGINX_VER:-unknown}"
+echo "  Certbot version  : ${CERTBOT_VER:-unknown}"
+echo "  Nginx status     : $(systemctl is-active nginx 2>/dev/null || echo 'unknown')"
+echo ""
+echo "  WHAT WAS CONFIGURED"
+echo "  ───────────────────────────────────────────────"
+echo "  [OK] Nginx installed and running"
+echo "  [OK] Certbot installed for SSL certificates"
+echo "  [OK] Server version hidden"
+echo "  [OK] Security headers snippet: $HEADERS_SNIPPET"
+echo "  [OK] Proxy params snippet: $PROXY_SNIPPET"
+echo "  [OK] Default site removed"
+echo ""
+echo "  NEXT STEPS"
+echo "  ───────────────────────────────────────────────"
+echo "  1. Run: sudo bash 04-deploy-app.sh"
+echo "     This will deploy your app and set up nginx + SSL automatically."
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
