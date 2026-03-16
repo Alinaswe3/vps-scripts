@@ -202,6 +202,55 @@ Offers to install security updates if any are found.
 
 ---
 
+## Testing on VirtualBox
+
+You can test all scripts locally on a VirtualBox VM before deploying to a real VPS.
+
+### VirtualBox Setup
+
+1. Create an Ubuntu 24.04 VM in VirtualBox
+2. Use **NAT** networking (the default)
+3. Set up **port forwarding** in VirtualBox:
+
+   **Settings > Network > Adapter 1 > Advanced > Port Forwarding**
+
+   | Name  | Protocol | Host IP   | Host Port | Guest IP  | Guest Port |
+   |-------|----------|-----------|-----------|-----------|------------|
+   | SSH   | TCP      |           | 2222      |           | 22         |
+   | HTTP  | TCP      |           | 8080      |           | 80         |
+   | HTTPS | TCP      |           | 8443      |           | 443        |
+
+4. SSH into the VM from your host: `ssh user@localhost -p 2222`
+
+### Local Test Mode
+
+When you run `04-deploy-app.sh` on a VirtualBox VM, it **automatically detects VirtualBox** and asks:
+
+```
+[!!] VirtualBox detected.
+Run in local test mode? (y/n):
+```
+
+If you say **yes**, the script:
+- Binds nginx to `0.0.0.0:80` (so traffic from port forwarding reaches it)
+- Sets `server_name` to `localhost`
+- Binds Docker ports to `0.0.0.0` instead of `127.0.0.1`
+- Skips SSL/certbot (not possible on localhost)
+
+After deployment, access your app from the host machine at: **http://localhost:8080**
+
+### What works the same
+
+Everything else works identically on VirtualBox and a real VPS:
+- Server hardening (01)
+- Docker installation (02)
+- Nginx setup (03)
+- App updates and rollbacks (05)
+- Admin tools (06)
+- Security audit (07)
+
+---
+
 ## Directory Structure
 
 After running all scripts and deploying apps, your server looks like this:

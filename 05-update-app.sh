@@ -33,6 +33,11 @@ section() { echo -e "\n${BLUE}════════════════�
 # --- Detect public/local IP (works on VPS and VirtualBox) ---
 get_server_ip() {
   local ip
+  if [ "${LOCAL_MODE:-false}" = "true" ]; then
+    ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
+    echo "${ip:-localhost}"
+    return
+  fi
   ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null) || true
   if [ -z "$ip" ]; then
     ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
@@ -433,7 +438,9 @@ fi
 # =============================================================================
 SERVER_IP=$(get_server_ip)
 
-if [ "${SSL_ACTIVE:-false}" = "true" ] && [ -n "${DOMAIN_NAME:-}" ]; then
+if [ "${LOCAL_MODE:-false}" = "true" ]; then
+  APP_URL="http://localhost:8080 (via VirtualBox port forwarding)"
+elif [ "${SSL_ACTIVE:-false}" = "true" ] && [ -n "${DOMAIN_NAME:-}" ]; then
   APP_URL="https://$DOMAIN_NAME"
 elif [ -n "${DOMAIN_NAME:-}" ]; then
   APP_URL="http://$DOMAIN_NAME"
