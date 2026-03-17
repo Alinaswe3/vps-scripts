@@ -343,13 +343,27 @@ if [ -f "$APP_DIR/.env.example" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
     # Pass through empty lines and comments unchanged
     if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-      echo "$line" >> "$ENV_FILE"
+      printf '%s\n' "$line" >> "$ENV_FILE"
+      continue
+    fi
+
+    # Skip lines without an = sign (not a valid KEY=VALUE)
+    if [[ "$line" != *"="* ]]; then
+      printf '%s\n' "$line" >> "$ENV_FILE"
       continue
     fi
 
     # Extract key — everything before the first =
     KEY="${line%%=*}"
-    KEY=$(echo "$KEY" | xargs)  # trim whitespace
+    # Trim whitespace from key (safe alternative to xargs)
+    KEY="${KEY#"${KEY%%[![:space:]]*}"}"
+    KEY="${KEY%"${KEY##*[![:space:]]}"}"
+
+    # Skip if key is empty after trimming
+    if [ -z "$KEY" ]; then
+      printf '%s\n' "$line" >> "$ENV_FILE"
+      continue
+    fi
 
     # Extract default value — everything after the first =
     DEFAULT_VAL="${line#*=}"
@@ -357,20 +371,21 @@ if [ -f "$APP_DIR/.env.example" ]; then
     # Handles: KEY=value # comment  →  KEY=value
     # Preserves: KEY="value # not a comment"  and  KEY=http://example.com/#path
     if [[ ! "$DEFAULT_VAL" =~ ^\" ]] && [[ ! "$DEFAULT_VAL" =~ ^\' ]]; then
-      DEFAULT_VAL=$(printf '%s' "$DEFAULT_VAL" | sed 's/ \s*#.*$//')
+      DEFAULT_VAL="${DEFAULT_VAL%% \#*}"
     fi
     # Strip surrounding quotes from default value for display
-    DISPLAY_VAL=$(printf '%s' "$DEFAULT_VAL" | sed "s/^[\"']//;s/[\"']$//")
-
-    # Prompt — sanitize for safe display (escape < and >)
-    SAFE_DISPLAY=$(printf '%s' "$DISPLAY_VAL" | sed 's/</\\</g; s/>/\\>/g')
+    DISPLAY_VAL="$DEFAULT_VAL"
+    DISPLAY_VAL="${DISPLAY_VAL#\"}"
+    DISPLAY_VAL="${DISPLAY_VAL%\"}"
+    DISPLAY_VAL="${DISPLAY_VAL#\'}"
+    DISPLAY_VAL="${DISPLAY_VAL%\'}"
 
     if [ -n "$DISPLAY_VAL" ]; then
-      read -p "  $KEY [$SAFE_DISPLAY]: " USER_VAL
+      read -p "  $KEY [$DISPLAY_VAL]: " USER_VAL || true
       # Use default if user pressed ENTER
-      USER_VAL=${USER_VAL:-$DISPLAY_VAL}
+      USER_VAL="${USER_VAL:-$DISPLAY_VAL}"
     else
-      read -p "  $KEY: " USER_VAL
+      read -p "  $KEY: " USER_VAL || true
     fi
 
     # Write KEY=VALUE — use printf to avoid expanding $, backticks, etc.
