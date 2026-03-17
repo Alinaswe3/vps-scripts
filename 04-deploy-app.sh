@@ -170,59 +170,132 @@ fi
 mkdir -p "$APP_DIR"
 
 # =============================================================================
-# STEP 2: GIT REPOSITORY
+# STEP 2: APP SOURCE
 # =============================================================================
-section "Step 2/6 — Git Repository"
+section "Step 2/6 — App Source"
 
-read -p "Git repository URL (HTTPS, e.g. https://github.com/user/repo.git): " GIT_URL
-[ -z "$GIT_URL" ] && error "Git URL cannot be empty."
-
-read -p "Branch to deploy (press ENTER for 'main'): " GIT_BRANCH
-GIT_BRANCH=${GIT_BRANCH:-main}
-
-# Private repo?
+echo "How would you like to provide your app?"
 echo ""
-read -p "Is this a private repository? (y/n): " IS_PRIVATE
+echo "  1) Git repository     — Clone from a GitHub/GitLab URL"
+echo "  2) Paste compose file — Paste your docker-compose.yml contents"
+echo "  3) Local folder       — Use an existing folder on this server"
+echo ""
 
+while true; do
+  read -p "Select [1-3]: " SOURCE_CHOICE
+  case "$SOURCE_CHOICE" in
+    1) SOURCE_TYPE="git"; break ;;
+    2) SOURCE_TYPE="paste"; break ;;
+    3) SOURCE_TYPE="local"; break ;;
+    *) warn "Enter 1, 2, or 3." ;;
+  esac
+done
+
+# --- Initialize defaults ---
+GIT_URL=""
+GIT_BRANCH=""
 GIT_TOKEN=""
-if [ "$IS_PRIVATE" = "y" ]; then
-  echo ""
-  echo "You need a Personal Access Token to clone a private repo."
-  echo "  GitHub: https://github.com/settings/tokens (scope: repo)"
-  echo "  GitLab: Settings > Access Tokens (scope: read_repository)"
-  echo ""
-  read -s -p "Paste your access token: " GIT_TOKEN; echo ""
-  [ -z "$GIT_TOKEN" ] && error "Access token cannot be empty for a private repo."
-fi
+IS_PRIVATE="n"
 
-# Clone the repo
-echo ""
-echo "Cloning repository..."
+case "$SOURCE_TYPE" in
 
-if [ -n "$GIT_TOKEN" ]; then
-  # Insert token into HTTPS URL: https://TOKEN@github.com/user/repo.git
-  CLONE_URL=$(echo "$GIT_URL" | sed "s|https://|https://${GIT_TOKEN}@|")
-  git clone --branch "$GIT_BRANCH" "$CLONE_URL" "$APP_DIR" 2>&1 || error "Failed to clone repository. Check your URL, branch, and token."
-  # Strip token from the saved remote for security
-  cd "$APP_DIR"
-  git remote set-url origin "$GIT_URL"
-else
-  git clone --branch "$GIT_BRANCH" "$GIT_URL" "$APP_DIR" 2>&1 || error "Failed to clone repository. Check your URL and branch."
-  cd "$APP_DIR"
-fi
+  # ─────────────────────────────────────────────
+  # SOURCE: Git Repository
+  # ─────────────────────────────────────────────
+  git)
+    echo ""
+    read -p "Git repository URL (HTTPS, e.g. https://github.com/user/repo.git): " GIT_URL
+    [ -z "$GIT_URL" ] && error "Git URL cannot be empty."
 
-log "Repository cloned successfully."
-log "  Branch: $GIT_BRANCH"
-log "  Commit: $(git rev-parse --short HEAD)"
+    read -p "Branch to deploy (press ENTER for 'main'): " GIT_BRANCH
+    GIT_BRANCH=${GIT_BRANCH:-main}
 
-# Detect docker-compose.yml vs Dockerfile
+    echo ""
+    read -p "Is this a private repository? (y/n): " IS_PRIVATE
+
+    if [ "$IS_PRIVATE" = "y" ]; then
+      echo ""
+      echo "You need a Personal Access Token to clone a private repo."
+      echo "  GitHub: https://github.com/settings/tokens (scope: repo)"
+      echo "  GitLab: Settings > Access Tokens (scope: read_repository)"
+      echo ""
+      read -s -p "Paste your access token: " GIT_TOKEN; echo ""
+      [ -z "$GIT_TOKEN" ] && error "Access token cannot be empty for a private repo."
+    fi
+
+    echo ""
+    echo "Cloning repository..."
+
+    if [ -n "$GIT_TOKEN" ]; then
+      CLONE_URL=$(echo "$GIT_URL" | sed "s|https://|https://${GIT_TOKEN}@|")
+      git clone --branch "$GIT_BRANCH" "$CLONE_URL" "$APP_DIR" 2>&1 || error "Failed to clone repository. Check your URL, branch, and token."
+      cd "$APP_DIR"
+      git remote set-url origin "$GIT_URL"
+    else
+      git clone --branch "$GIT_BRANCH" "$GIT_URL" "$APP_DIR" 2>&1 || error "Failed to clone repository. Check your URL and branch."
+      cd "$APP_DIR"
+    fi
+
+    log "Repository cloned successfully."
+    log "  Branch: $GIT_BRANCH"
+    log "  Commit: $(git rev-parse --short HEAD)"
+    ;;
+
+  # ─────────────────────────────────────────────
+  # SOURCE: Paste docker-compose.yml
+  # ─────────────────────────────────────────────
+  paste)
+    echo ""
+    echo "Paste your docker-compose.yml contents below."
+    echo "When done, press ENTER on a new line, then press CTRL+D."
+    echo ""
+    echo "--- START PASTE ---"
+    COMPOSE_CONTENTS=$(cat)
+    echo "--- END PASTE ---"
+
+    [ -z "$COMPOSE_CONTENTS" ] && error "docker-compose.yml contents cannot be empty."
+
+    echo "$COMPOSE_CONTENTS" > "$APP_DIR/docker-compose.yml"
+    chmod 600 "$APP_DIR/docker-compose.yml"
+    log "docker-compose.yml saved to $APP_DIR"
+    cd "$APP_DIR"
+    ;;
+
+  # ─────────────────────────────────────────────
+  # SOURCE: Local folder on the server
+  # ─────────────────────────────────────────────
+  local)
+    echo ""
+    echo "Enter the full path to your app folder on this server."
+    echo "The folder should contain a docker-compose.yml and/or Dockerfile(s)."
+    echo ""
+    read -p "Folder path: " LOCAL_FOLDER
+
+    # Validate
+    [ -z "$LOCAL_FOLDER" ] && error "Folder path cannot be empty."
+    [ ! -d "$LOCAL_FOLDER" ] && error "Folder '$LOCAL_FOLDER' does not exist."
+
+    # Check it has something useful
+    if [ ! -f "$LOCAL_FOLDER/docker-compose.yml" ] && [ ! -f "$LOCAL_FOLDER/docker-compose.yaml" ] && [ ! -f "$LOCAL_FOLDER/Dockerfile" ]; then
+      error "No docker-compose.yml or Dockerfile found in '$LOCAL_FOLDER'."
+    fi
+
+    # Copy into apps directory
+    echo "Copying files to $APP_DIR..."
+    cp -r "$LOCAL_FOLDER/." "$APP_DIR/"
+    log "Files copied from $LOCAL_FOLDER to $APP_DIR"
+    cd "$APP_DIR"
+    ;;
+esac
+
+# --- Detect docker-compose.yml vs Dockerfile ---
 HAS_COMPOSE=false
 HAS_DOCKERFILE=false
 [ -f "$APP_DIR/docker-compose.yml" ] || [ -f "$APP_DIR/docker-compose.yaml" ] && HAS_COMPOSE=true
 [ -f "$APP_DIR/Dockerfile" ] && HAS_DOCKERFILE=true
 
 if [ "$HAS_COMPOSE" = false ] && [ "$HAS_DOCKERFILE" = false ]; then
-  error "No docker-compose.yml or Dockerfile found in the repository root. Your app must have one of these."
+  error "No docker-compose.yml or Dockerfile found in the app directory. Your app must have one of these."
 fi
 
 if [ "$HAS_COMPOSE" = true ]; then
@@ -527,8 +600,9 @@ cat > "$APP_DIR/.deploy-info" << EOF
 APP_NAME=$APP_NAME
 APP_DIR=$APP_DIR
 APP_PORT=$APP_PORT
-GIT_URL=$GIT_URL
-GIT_BRANCH=$GIT_BRANCH
+SOURCE_TYPE=$SOURCE_TYPE
+GIT_URL=${GIT_URL:-}
+GIT_BRANCH=${GIT_BRANCH:-}
 DEPLOY_MODE=$DEPLOY_MODE
 DOMAIN_NAME=${DOMAIN_NAME:-}
 DEPLOY_USER=$DEPLOY_USER
@@ -573,7 +647,13 @@ echo "  SSL           : ${SSL_ACTIVE:-false}"
 echo ""
 echo "  WHAT WAS CONFIGURED"
 echo "  ───────────────────────────────────────────────"
+if [ "$SOURCE_TYPE" = "git" ]; then
 echo "  [OK] Repository cloned from $GIT_URL"
+elif [ "$SOURCE_TYPE" = "paste" ]; then
+echo "  [OK] docker-compose.yml saved from pasted content"
+elif [ "$SOURCE_TYPE" = "local" ]; then
+echo "  [OK] Files copied from local folder"
+fi
 if [ -f "$APP_DIR/.env" ]; then
 echo "  [OK] Environment variables configured"
 fi

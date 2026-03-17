@@ -191,31 +191,76 @@ if [ "$UPDATE_CODE" = true ]; then
 
   cd "$APP_DIR"
 
-  # Handle private repo re-authentication
-  if [ "${IS_PRIVATE:-n}" = "y" ]; then
-    echo "This is a private repository. You may need to provide your access token again."
-    read -p "Enter access token (or press ENTER to use existing): " NEW_TOKEN
-    if [ -n "$NEW_TOKEN" ]; then
-      AUTH_URL=$(echo "$GIT_URL" | sed "s|https://|https://${NEW_TOKEN}@|")
-      git remote set-url origin "$AUTH_URL"
-    fi
-  fi
+  case "${SOURCE_TYPE:-git}" in
 
-  echo "Pulling latest code from branch '$GIT_BRANCH'..."
-  git fetch origin "$GIT_BRANCH" 2>&1
-  git checkout "$GIT_BRANCH" 2>&1
-  git reset --hard "origin/$GIT_BRANCH" 2>&1
+    git)
+      # Handle private repo re-authentication
+      if [ "${IS_PRIVATE:-n}" = "y" ]; then
+        echo "This is a private repository. You may need to provide your access token again."
+        read -p "Enter access token (or press ENTER to use existing): " NEW_TOKEN
+        if [ -n "$NEW_TOKEN" ]; then
+          AUTH_URL=$(echo "$GIT_URL" | sed "s|https://|https://${NEW_TOKEN}@|")
+          git remote set-url origin "$AUTH_URL"
+        fi
+      fi
 
-  NEW_COMMIT=$(git rev-parse --short HEAD)
+      echo "Pulling latest code from branch '$GIT_BRANCH'..."
+      git fetch origin "$GIT_BRANCH" 2>&1
+      git checkout "$GIT_BRANCH" 2>&1
+      git reset --hard "origin/$GIT_BRANCH" 2>&1
 
-  # Strip token from remote URL for security
-  git remote set-url origin "$GIT_URL" 2>/dev/null || true
+      NEW_COMMIT=$(git rev-parse --short HEAD)
 
-  if [ "$PREVIOUS_COMMIT" = "$NEW_COMMIT" ]; then
-    log "Code is already up to date (commit: $NEW_COMMIT)."
-  else
-    log "Code updated: $PREVIOUS_COMMIT -> $NEW_COMMIT"
-  fi
+      # Strip token from remote URL for security
+      git remote set-url origin "$GIT_URL" 2>/dev/null || true
+
+      if [ "$PREVIOUS_COMMIT" = "$NEW_COMMIT" ]; then
+        log "Code is already up to date (commit: $NEW_COMMIT)."
+      else
+        log "Code updated: $PREVIOUS_COMMIT -> $NEW_COMMIT"
+      fi
+      ;;
+
+    paste)
+      echo "This app was deployed by pasting a docker-compose.yml."
+      echo "To update, paste your new docker-compose.yml contents below."
+      echo "When done, press ENTER on a new line, then press CTRL+D."
+      echo "(Or type 'skip' and press CTRL+D to keep the current file.)"
+      echo ""
+      echo "--- START PASTE ---"
+      NEW_COMPOSE=$(cat)
+      echo "--- END PASTE ---"
+
+      if [ -n "$NEW_COMPOSE" ] && [ "$NEW_COMPOSE" != "skip" ]; then
+        echo "$NEW_COMPOSE" > "$APP_DIR/docker-compose.yml"
+        chmod 600 "$APP_DIR/docker-compose.yml"
+        log "docker-compose.yml updated."
+      else
+        log "Keeping existing docker-compose.yml."
+      fi
+      ;;
+
+    local)
+      echo "This app was deployed from a local folder."
+      read -p "Enter the folder path to copy updated files from (or press ENTER to skip): " UPDATE_FOLDER
+
+      if [ -n "$UPDATE_FOLDER" ]; then
+        if [ ! -d "$UPDATE_FOLDER" ]; then
+          warn "Folder '$UPDATE_FOLDER' does not exist. Skipping code update."
+        else
+          echo "Copying updated files from $UPDATE_FOLDER..."
+          cp -r "$UPDATE_FOLDER/." "$APP_DIR/"
+          log "Files updated from $UPDATE_FOLDER."
+        fi
+      else
+        log "Skipping code update."
+      fi
+      ;;
+
+    *)
+      warn "Unknown source type '${SOURCE_TYPE:-}'. Skipping code update."
+      ;;
+  esac
 fi
 
 # =============================================================================

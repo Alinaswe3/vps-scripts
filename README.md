@@ -122,26 +122,33 @@ These snippets are reused automatically when you deploy apps.
 
 ### 04-deploy-app.sh — App Deployment
 
-Deploys any Dockerized app from a git repository. Supports multiple apps on the same server.
+Deploys any Dockerized app to your server. Supports multiple apps on the same VPS.
+
+**Three ways to provide your app:**
+
+| Option | Best for |
+|--------|----------|
+| **1. Git repository** | Apps hosted on GitHub/GitLab. Clones the repo, supports private repos with access tokens. |
+| **2. Paste docker-compose.yml** | Quick deployments. Paste your compose file contents directly — great for Docker Hub images or simple setups. |
+| **3. Local folder** | Apps already on the server. Point to a folder with your docker-compose.yml and/or Dockerfiles, and it copies them into the managed apps directory. |
 
 **You'll be asked for:**
 - App name (e.g. `myapp`)
-- Git repository URL (HTTPS)
-- Git branch (default: `main`)
-- Whether it's a private repo (if yes, provide an access token)
+- App source (git repo, paste compose, or local folder)
 - Port your app listens on (e.g. 3000, 8000, 8080)
 - Environment variables (reads from `.env.example` if present, or manual entry)
 - Domain name (optional — can use server IP instead)
 - Whether to set up SSL (if you have a domain)
 
 **What it does:**
-- Clones your repo
+- Gets your app source (clone, paste, or copy)
 - Detects `docker-compose.yml` or `Dockerfile` automatically
 - Generates a `docker-compose.yml` from Dockerfile if needed
 - Prompts for each `.env.example` variable so you can fill in values
 - Sets up Nginx reverse proxy with rate limiting and security headers
 - Configures SSL via Certbot (with DNS verification dry-run)
 - Saves deployment metadata for the update script
+- Auto-detects VirtualBox and offers local test mode
 
 **Your app lives at:** `/home/<deploy-user>/apps/<app-name>/`
 
@@ -155,9 +162,11 @@ Updates a deployed app's code, environment variables, or both. Automatically bac
 - Which app to update (shows a list of deployed apps)
 - What to update: code, env vars, or both
 
-**For code updates:**
-- Pulls latest code from git
-- Rebuilds Docker containers
+**For code updates (depends on how you deployed):**
+- **Git repo** — pulls latest code from your branch
+- **Paste compose** — asks you to paste an updated docker-compose.yml
+- **Local folder** — asks for the folder path to copy updated files from
+- Rebuilds Docker containers after updating
 - If the app fails to start → shows logs and offers to roll back
 
 **For env updates:**
