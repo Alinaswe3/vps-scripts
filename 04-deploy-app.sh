@@ -367,18 +367,25 @@ if [ -f "$APP_DIR/.env.example" ]; then
 
     # Extract default value — everything after the first =
     DEFAULT_VAL="${line#*=}"
-    # Strip inline comments (unquoted # preceded by space)
-    # Handles: KEY=value # comment  →  KEY=value
-    # Preserves: KEY="value # not a comment"  and  KEY=http://example.com/#path
-    if [[ ! "$DEFAULT_VAL" =~ ^\" ]] && [[ ! "$DEFAULT_VAL" =~ ^\' ]]; then
-      DEFAULT_VAL="${DEFAULT_VAL%% \#*}"
+
+    # Strip inline comments — handles all these formats:
+    #   KEY=value # comment          →  value
+    #   KEY="value" # comment        →  value
+    #   KEY='value' # comment        →  value
+    #   KEY="value # not a comment"  →  value # not a comment
+    #   KEY=http://url/#path         →  http://url/#path
+    if [[ "$DEFAULT_VAL" =~ ^\"(.*)\"[[:space:]]*(\#.*)?$ ]]; then
+      # Double-quoted value: extract content between quotes
+      DISPLAY_VAL="${BASH_REMATCH[1]}"
+    elif [[ "$DEFAULT_VAL" =~ ^\'(.*)\'[[:space:]]*(\#.*)?$ ]]; then
+      # Single-quoted value: extract content between quotes
+      DISPLAY_VAL="${BASH_REMATCH[1]}"
+    else
+      # Unquoted value: strip trailing " #..." comments
+      DISPLAY_VAL="${DEFAULT_VAL%% #*}"
+      # Trim trailing whitespace
+      DISPLAY_VAL="${DISPLAY_VAL%"${DISPLAY_VAL##*[![:space:]]}"}"
     fi
-    # Strip surrounding quotes from default value for display
-    DISPLAY_VAL="$DEFAULT_VAL"
-    DISPLAY_VAL="${DISPLAY_VAL#\"}"
-    DISPLAY_VAL="${DISPLAY_VAL%\"}"
-    DISPLAY_VAL="${DISPLAY_VAL#\'}"
-    DISPLAY_VAL="${DISPLAY_VAL%\'}"
 
     if [ -n "$DISPLAY_VAL" ]; then
       read -p "  $KEY [$DISPLAY_VAL]: " USER_VAL || true
