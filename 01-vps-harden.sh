@@ -131,6 +131,7 @@ export DEBIAN_FRONTEND=noninteractive
 apt update -y && apt upgrade -y
 
 apt install -y \
+  openssh-server \
   curl wget git ufw fail2ban \
   unattended-upgrades apt-listchanges \
   gnupg2 ca-certificates lsb-release \
