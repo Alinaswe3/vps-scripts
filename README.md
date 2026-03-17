@@ -193,6 +193,7 @@ Installs helpful commands to `/usr/local/bin/` so they're available system-wide.
 | `vps-list-apps` | `vps-list-apps` | List all deployed apps with status, domain, port, and commit |
 | `vps-logs` | `vps-logs myapp` | Tail Docker logs for an app (live, last 100 lines) |
 | `vps-restart` | `vps-restart myapp` | Restart an app's containers |
+| `vps-remove-app` | `sudo vps-remove-app` | Interactively remove a deployed app (stops containers, removes nginx config, deletes files, optionally revokes SSL) |
 
 ---
 

@@ -255,7 +255,7 @@ case "$SOURCE_TYPE" in
 
     [ -z "$COMPOSE_CONTENTS" ] && error "docker-compose.yml contents cannot be empty."
 
-    echo "$COMPOSE_CONTENTS" > "$APP_DIR/docker-compose.yml"
+    printf '%s\n' "$COMPOSE_CONTENTS" > "$APP_DIR/docker-compose.yml"
     chmod 600 "$APP_DIR/docker-compose.yml"
     log "docker-compose.yml saved to $APP_DIR"
     cd "$APP_DIR"
@@ -339,26 +339,42 @@ if [ -f "$APP_DIR/.env.example" ]; then
   echo ""
 
   # Read .env.example and prompt for each value
-  > "$ENV_FILE"
+> "$ENV_FILE"
   while IFS= read -r line || [ -n "$line" ]; do
-    # Skip empty lines and comments
+    # Pass through empty lines and comments unchanged
     if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
       echo "$line" >> "$ENV_FILE"
       continue
     fi
 
-    # Extract key and default value
-    KEY=$(echo "$line" | cut -d= -f1 | xargs)
-    DEFAULT_VAL=$(echo "$line" | cut -d= -f2-)
+    # Extract key — everything before the first =
+    KEY="${line%%=*}"
+    KEY=$(echo "$KEY" | xargs)  # trim whitespace
 
-    if [ -n "$DEFAULT_VAL" ]; then
-      read -p "  $KEY (default: $DEFAULT_VAL): " USER_VAL
-      USER_VAL=${USER_VAL:-$DEFAULT_VAL}
+    # Extract default value — everything after the first =
+    DEFAULT_VAL="${line#*=}"
+    # Strip inline comments (unquoted # preceded by space)
+    # Handles: KEY=value # comment  →  KEY=value
+    # Preserves: KEY="value # not a comment"  and  KEY=http://example.com/#path
+    if [[ ! "$DEFAULT_VAL" =~ ^\" ]] && [[ ! "$DEFAULT_VAL" =~ ^\' ]]; then
+      DEFAULT_VAL=$(printf '%s' "$DEFAULT_VAL" | sed 's/ \s*#.*$//')
+    fi
+    # Strip surrounding quotes from default value for display
+    DISPLAY_VAL=$(printf '%s' "$DEFAULT_VAL" | sed "s/^[\"']//;s/[\"']$//")
+
+    # Prompt — sanitize for safe display (escape < and >)
+    SAFE_DISPLAY=$(printf '%s' "$DISPLAY_VAL" | sed 's/</\\</g; s/>/\\>/g')
+
+    if [ -n "$DISPLAY_VAL" ]; then
+      read -p "  $KEY [$SAFE_DISPLAY]: " USER_VAL
+      # Use default if user pressed ENTER
+      USER_VAL=${USER_VAL:-$DISPLAY_VAL}
     else
       read -p "  $KEY: " USER_VAL
     fi
 
-    echo "${KEY}=${USER_VAL}" >> "$ENV_FILE"
+    # Write KEY=VALUE — use printf to avoid expanding $, backticks, etc.
+    printf '%s="%s"\n' "$KEY" "$USER_VAL" >> "$ENV_FILE"
   done < "$APP_DIR/.env.example"
 
   chmod 600 "$ENV_FILE"
@@ -538,9 +554,6 @@ else
   # Dockerfile only — generate a minimal docker-compose.yml
   echo "Generating docker-compose.yml from Dockerfile..."
 
-  ENV_LINE=""
-  [ -f "$ENV_FILE" ] && ENV_LINE="    env_file:\n      - .env"
-
   # In local mode, bind to all interfaces for host access
   if [ "$LOCAL_MODE" = true ]; then
     PORT_BINDING="0.0.0.0:$APP_PORT:$APP_PORT"
@@ -641,7 +654,8 @@ echo "  App name      : $APP_NAME"
 echo "  App URL       : $APP_URL"
 echo "  App directory : $APP_DIR"
 echo "  App port      : $APP_PORT"
-echo "  Git branch    : $GIT_BRANCH"
+echo "  Source        : $SOURCE_TYPE"
+[ "$SOURCE_TYPE" = "git" ] && echo "  Git branch    : $GIT_BRANCH"
 echo "  Deploy mode   : $DEPLOY_MODE"
 echo "  SSL           : ${SSL_ACTIVE:-false}"
 echo ""
