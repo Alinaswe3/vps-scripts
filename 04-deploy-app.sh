@@ -388,11 +388,11 @@ if [ -f "$APP_DIR/.env.example" ]; then
     fi
 
     if [ -n "$DISPLAY_VAL" ]; then
-      read -p "  $KEY [$DISPLAY_VAL]: " USER_VAL || true
+      read -p "  $KEY [$DISPLAY_VAL]: " USER_VAL < /dev/tty || true
       # Use default if user pressed ENTER
       USER_VAL="${USER_VAL:-$DISPLAY_VAL}"
     else
-      read -p "  $KEY: " USER_VAL || true
+      read -p "  $KEY: " USER_VAL < /dev/tty || true
     fi
 
     # Write KEY=VALUE — use printf to avoid expanding $, backticks, etc.
