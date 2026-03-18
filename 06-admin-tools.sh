@@ -296,11 +296,12 @@ fi
 section "Installing: vps-list-apps"
 
 if install_cmd "vps-list-apps"; then
-  cat > /usr/local/bin/vps-list-apps << CMDEOF
+  cat > /usr/local/bin/vps-list-apps << 'CMDEOF'
 #!/bin/bash
 # vps-list-apps — List all deployed apps with status
 
-APPS_DIR="$APPS_DIR"
+DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
+APPS_DIR="/home/$DEPLOY_USER/apps"
 
 if [ ! -d "\$APPS_DIR" ] || [ -z "\$(ls -A "\$APPS_DIR" 2>/dev/null)" ]; then
   echo "No apps deployed yet."
@@ -356,11 +357,12 @@ fi
 section "Installing: vps-logs"
 
 if install_cmd "vps-logs"; then
-  cat > /usr/local/bin/vps-logs << CMDEOF
+  cat > /usr/local/bin/vps-logs << 'CMDEOF'
 #!/bin/bash
 # vps-logs — Tail Docker logs for a deployed app
 
-APPS_DIR="$APPS_DIR"
+DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
+APPS_DIR="/home/$DEPLOY_USER/apps"
 
 if [ -z "\$1" ]; then
   echo "Usage: vps-logs <app-name> [--lines N]"
@@ -398,11 +400,12 @@ fi
 section "Installing: vps-restart"
 
 if install_cmd "vps-restart"; then
-  cat > /usr/local/bin/vps-restart << CMDEOF
+  cat > /usr/local/bin/vps-restart << 'CMDEOF'
 #!/bin/bash
 # vps-restart — Restart a deployed app's containers
 
-APPS_DIR="$APPS_DIR"
+DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
+APPS_DIR="/home/$DEPLOY_USER/apps"
 
 if [ -z "\$1" ]; then
   echo "Usage: vps-restart <app-name>"
@@ -440,13 +443,14 @@ fi
 section "Installing: vps-remove-app"
 
 if install_cmd "vps-remove-app"; then
-  cat > /usr/local/bin/vps-remove-app << CMDEOF
+  cat > /usr/local/bin/vps-remove-app << 'CMDEOF'
 #!/bin/bash
 # vps-remove-app — Completely remove a deployed app
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
-APPS_DIR="$APPS_DIR"
+DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
+APPS_DIR="/home/$DEPLOY_USER/apps"
 
 if [ "\$EUID" -ne 0 ]; then
   echo -e "\${RED}[ERROR]\${NC} Must run as root. Use: sudo vps-remove-app"
