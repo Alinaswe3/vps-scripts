@@ -303,7 +303,7 @@ if install_cmd "vps-list-apps"; then
 DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
 APPS_DIR="/home/$DEPLOY_USER/apps"
 
-if [ ! -d "\$APPS_DIR" ] || [ -z "\$(ls -A "\$APPS_DIR" 2>/dev/null)" ]; then
+if [ ! -d "$APPS_DIR" ] || [ -z "$(ls -A "$APPS_DIR" 2>/dev/null)" ]; then
   echo "No apps deployed yet."
   echo "Deploy your first app with: sudo bash 04-deploy-app.sh"
   exit 0
@@ -315,32 +315,32 @@ echo "  DEPLOYED APPS"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
 
-for app_dir in "\$APPS_DIR"/*/; do
-  [ ! -d "\$app_dir" ] && continue
-  APP=\$(basename "\$app_dir")
-  INFO_FILE="\$app_dir/.deploy-info"
+for app_dir in "$APPS_DIR"/*/; do
+  [ ! -d "$app_dir" ] && continue
+  APP=$(basename "$app_dir")
+  INFO_FILE="$app_dir/.deploy-info"
 
-  if [ -f "\$INFO_FILE" ]; then
-    DOMAIN=\$(grep "^DOMAIN_NAME=" "\$INFO_FILE" 2>/dev/null | cut -d= -f2-)
-    PORT=\$(grep "^APP_PORT=" "\$INFO_FILE" 2>/dev/null | cut -d= -f2-)
-    COMMIT=\$(grep "^DEPLOYED_COMMIT=" "\$INFO_FILE" 2>/dev/null | cut -d= -f2-)
-    DEPLOYED=\$(grep "^DEPLOYED_AT=" "\$INFO_FILE" 2>/dev/null | cut -d= -f2-)
+  if [ -f "$INFO_FILE" ]; then
+    DOMAIN=$(grep "^DOMAIN_NAME=" "$INFO_FILE" 2>/dev/null | cut -d= -f2-)
+    PORT=$(grep "^APP_PORT=" "$INFO_FILE" 2>/dev/null | cut -d= -f2-)
+    COMMIT=$(grep "^DEPLOYED_COMMIT=" "$INFO_FILE" 2>/dev/null | cut -d= -f2-)
+    DEPLOYED=$(grep "^DEPLOYED_AT=" "$INFO_FILE" 2>/dev/null | cut -d= -f2-)
 
     # Check if containers are running
     STATUS="stopped"
-    if cd "\$app_dir" && docker compose ps 2>/dev/null | grep -q "Up\|running"; then
+    if cd "$app_dir" && docker compose ps 2>/dev/null | grep -q "Up\|running"; then
       STATUS="running"
     fi
 
-    echo "  \$APP"
-    echo "    Status  : \$STATUS"
-    [ -n "\$DOMAIN" ] && echo "    Domain  : \$DOMAIN"
-    [ -n "\$PORT" ]   && echo "    Port    : \$PORT"
-    [ -n "\$COMMIT" ] && echo "    Commit  : \$COMMIT"
-    [ -n "\$DEPLOYED" ] && echo "    Deployed: \$DEPLOYED"
+    echo "  $APP"
+    echo "    Status  : $STATUS"
+    [ -n "$DOMAIN" ] && echo "    Domain  : $DOMAIN"
+    [ -n "$PORT" ]   && echo "    Port    : $PORT"
+    [ -n "$COMMIT" ] && echo "    Commit  : $COMMIT"
+    [ -n "$DEPLOYED" ] && echo "    Deployed: $DEPLOYED"
     echo ""
   else
-    echo "  \$APP (no deploy info found)"
+    echo "  $APP (no deploy info found)"
     echo ""
   fi
 done
@@ -364,30 +364,30 @@ if install_cmd "vps-logs"; then
 DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
 APPS_DIR="/home/$DEPLOY_USER/apps"
 
-if [ -z "\$1" ]; then
+if [ -z "$1" ]; then
   echo "Usage: vps-logs <app-name> [--lines N]"
   echo ""
   echo "Available apps:"
-  ls "\$APPS_DIR" 2>/dev/null | sed 's/^/  /' || echo "  No apps deployed"
+  ls "$APPS_DIR" 2>/dev/null | sed 's/^/  /' || echo "  No apps deployed"
   exit 1
 fi
 
-APP_NAME="\$1"
-APP_DIR="\$APPS_DIR/\$APP_NAME"
+APP_NAME="$1"
+APP_DIR="$APPS_DIR/$APP_NAME"
 
-if [ ! -d "\$APP_DIR" ]; then
-  echo "Error: App '\$APP_NAME' not found."
+if [ ! -d "$APP_DIR" ]; then
+  echo "Error: App '$APP_NAME' not found."
   echo ""
   echo "Available apps:"
-  ls "\$APPS_DIR" 2>/dev/null | sed 's/^/  /' || echo "  No apps deployed"
+  ls "$APPS_DIR" 2>/dev/null | sed 's/^/  /' || echo "  No apps deployed"
   exit 1
 fi
 
-LINES="\${2:-}"
-if [ "\$LINES" = "--lines" ] && [ -n "\${3:-}" ]; then
-  cd "\$APP_DIR" && docker compose logs --tail="\$3" -f
+LINES="${2:-}"
+if [ "$LINES" = "--lines" ] && [ -n "${3:-}" ]; then
+  cd "$APP_DIR" && docker compose logs --tail="$3" -f
 else
-  cd "\$APP_DIR" && docker compose logs --tail=100 -f
+  cd "$APP_DIR" && docker compose logs --tail=100 -f
 fi
 CMDEOF
   chmod +x /usr/local/bin/vps-logs
@@ -407,27 +407,27 @@ if install_cmd "vps-restart"; then
 DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
 APPS_DIR="/home/$DEPLOY_USER/apps"
 
-if [ -z "\$1" ]; then
+if [ -z "$1" ]; then
   echo "Usage: vps-restart <app-name>"
   echo ""
   echo "Available apps:"
-  ls "\$APPS_DIR" 2>/dev/null | sed 's/^/  /' || echo "  No apps deployed"
+  ls "$APPS_DIR" 2>/dev/null | sed 's/^/  /' || echo "  No apps deployed"
   exit 1
 fi
 
-APP_NAME="\$1"
-APP_DIR="\$APPS_DIR/\$APP_NAME"
+APP_NAME="$1"
+APP_DIR="$APPS_DIR/$APP_NAME"
 
-if [ ! -d "\$APP_DIR" ]; then
-  echo "Error: App '\$APP_NAME' not found."
+if [ ! -d "$APP_DIR" ]; then
+  echo "Error: App '$APP_NAME' not found."
   echo ""
   echo "Available apps:"
-  ls "\$APPS_DIR" 2>/dev/null | sed 's/^/  /' || echo "  No apps deployed"
+  ls "$APPS_DIR" 2>/dev/null | sed 's/^/  /' || echo "  No apps deployed"
   exit 1
 fi
 
-echo "Restarting \$APP_NAME..."
-cd "\$APP_DIR" && docker compose restart
+echo "Restarting $APP_NAME..."
+cd "$APP_DIR" && docker compose restart
 
 echo ""
 echo "Container status:"
@@ -452,19 +452,19 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC
 DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
 APPS_DIR="/home/$DEPLOY_USER/apps"
 
-if [ "\$EUID" -ne 0 ]; then
-  echo -e "\${RED}[ERROR]\${NC} Must run as root. Use: sudo vps-remove-app"
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}[ERROR]${NC} Must run as root. Use: sudo vps-remove-app"
   exit 1
 fi
 
 # List apps and let user pick
 echo ""
-echo -e "\${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
-echo -e "\${BLUE}  REMOVE A DEPLOYED APP\${NC}"
-echo -e "\${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}  REMOVE A DEPLOYED APP${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 
-if [ ! -d "\$APPS_DIR" ] || [ -z "\$(ls -A "\$APPS_DIR" 2>/dev/null)" ]; then
+if [ ! -d "$APPS_DIR" ] || [ -z "$(ls -A "$APPS_DIR" 2>/dev/null)" ]; then
   echo "No apps deployed."
   exit 0
 fi
@@ -473,52 +473,52 @@ echo "Deployed apps:"
 echo ""
 APP_LIST=()
 INDEX=1
-for app_dir in "\$APPS_DIR"/*/; do
-  [ ! -d "\$app_dir" ] && continue
-  APP=\$(basename "\$app_dir")
-  APP_LIST+=("\$APP")
+for app_dir in "$APPS_DIR"/*/; do
+  [ ! -d "$app_dir" ] && continue
+  APP=$(basename "$app_dir")
+  APP_LIST+=("$APP")
 
   # Check running status
   STATUS="stopped"
-  if cd "\$app_dir" && docker compose ps 2>/dev/null | grep -q "Up\|running"; then
+  if cd "$app_dir" && docker compose ps 2>/dev/null | grep -q "Up\|running"; then
     STATUS="running"
   fi
 
-  echo "  \$INDEX) \$APP [\$STATUS]"
+  echo "  $INDEX) $APP [$STATUS]"
   ((INDEX++))
 done
 
 echo ""
-read -p "Select app to remove [1-\${#APP_LIST[@]}]: " APP_INDEX
+read -p "Select app to remove [1-${#APP_LIST[@]}]: " APP_INDEX
 
 # Validate selection
-if ! [[ "\$APP_INDEX" =~ ^[0-9]+\$ ]] || [ "\$APP_INDEX" -lt 1 ] || [ "\$APP_INDEX" -gt \${#APP_LIST[@]} ]; then
+if ! [[ "$APP_INDEX" =~ ^[0-9]+$ ]] || [ "$APP_INDEX" -lt 1 ] || [ "$APP_INDEX" -gt ${#APP_LIST[@]} ]; then
   echo "Invalid selection."
   exit 1
 fi
 
-APP_NAME="\${APP_LIST[\$((APP_INDEX-1))]}"
-APP_DIR="\$APPS_DIR/\$APP_NAME"
+APP_NAME="${APP_LIST[$((APP_INDEX-1))]}"
+APP_DIR="$APPS_DIR/$APP_NAME"
 
 echo ""
-echo -e "\${YELLOW}[!!]\${NC} This will permanently remove '\$APP_NAME':"
+echo -e "${YELLOW}[!!]${NC} This will permanently remove '$APP_NAME':"
 echo "  - Stop and remove all Docker containers"
-echo "  - Delete the app directory: \$APP_DIR"
+echo "  - Delete the app directory: $APP_DIR"
 echo "  - Remove the nginx config"
 
 # Check if SSL is configured
 DOMAIN=""
-if [ -f "\$APP_DIR/.deploy-info" ]; then
-  DOMAIN=\$(grep "^DOMAIN_NAME=" "\$APP_DIR/.deploy-info" 2>/dev/null | cut -d= -f2-)
+if [ -f "$APP_DIR/.deploy-info" ]; then
+  DOMAIN=$(grep "^DOMAIN_NAME=" "$APP_DIR/.deploy-info" 2>/dev/null | cut -d= -f2-)
 fi
-if [ -n "\$DOMAIN" ]; then
-  echo "  - Optionally revoke the SSL certificate for \$DOMAIN"
+if [ -n "$DOMAIN" ]; then
+  echo "  - Optionally revoke the SSL certificate for $DOMAIN"
 fi
 
 echo ""
-read -p "Type the app name '\$APP_NAME' to confirm removal: " CONFIRM
+read -p "Type the app name '$APP_NAME' to confirm removal: " CONFIRM
 
-if [ "\$CONFIRM" != "\$APP_NAME" ]; then
+if [ "$CONFIRM" != "$APP_NAME" ]; then
   echo "Names don't match. Aborted."
   exit 0
 fi
@@ -527,49 +527,49 @@ echo ""
 
 # Step 1: Stop and remove containers
 echo ""
-echo -e "\${YELLOW}[!!]\${NC} Docker volumes may contain databases, uploads, or other persistent data."
-read -p "Also delete Docker volumes for '\$APP_NAME'? (y/n): " DELETE_VOLUMES
+echo -e "${YELLOW}[!!]${NC} Docker volumes may contain databases, uploads, or other persistent data."
+read -p "Also delete Docker volumes for '$APP_NAME'? (y/n): " DELETE_VOLUMES
 echo ""
 echo "Stopping Docker containers..."
-if [ "\$DELETE_VOLUMES" = "y" ]; then
-  cd "\$APP_DIR" && docker compose down --volumes --remove-orphans 2>/dev/null || true
-  echo -e "\${GREEN}[OK]\${NC} Containers stopped and volumes deleted."
+if [ "$DELETE_VOLUMES" = "y" ]; then
+  cd "$APP_DIR" && docker compose down --volumes --remove-orphans 2>/dev/null || true
+  echo -e "${GREEN}[OK]${NC} Containers stopped and volumes deleted."
 else
-  cd "\$APP_DIR" && docker compose down --remove-orphans 2>/dev/null || true
-  echo -e "\${GREEN}[OK]\${NC} Containers stopped. Volumes preserved."
+  cd "$APP_DIR" && docker compose down --remove-orphans 2>/dev/null || true
+  echo -e "${GREEN}[OK]${NC} Containers stopped. Volumes preserved."
 fi
 
 # Step 2: Remove nginx config
-if [ -f "/etc/nginx/sites-enabled/\$APP_NAME" ] || [ -f "/etc/nginx/sites-available/\$APP_NAME" ]; then
-  rm -f "/etc/nginx/sites-enabled/\$APP_NAME"
-  rm -f "/etc/nginx/sites-available/\$APP_NAME"
+if [ -f "/etc/nginx/sites-enabled/$APP_NAME" ] || [ -f "/etc/nginx/sites-available/$APP_NAME" ]; then
+  rm -f "/etc/nginx/sites-enabled/$APP_NAME"
+  rm -f "/etc/nginx/sites-available/$APP_NAME"
   nginx -t > /dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true
-  echo -e "\${GREEN}[OK]\${NC} Nginx config removed."
+  echo -e "${GREEN}[OK]${NC} Nginx config removed."
 else
-  echo -e "\${GREEN}[OK]\${NC} No nginx config found (already clean)."
+  echo -e "${GREEN}[OK]${NC} No nginx config found (already clean)."
 fi
 
 # Step 3: Optionally revoke SSL
-if [ -n "\$DOMAIN" ] && command -v certbot &>/dev/null; then
-  if certbot certificates 2>/dev/null | grep -q "\$DOMAIN"; then
-    read -p "Revoke SSL certificate for \$DOMAIN? (y/n): " REVOKE_SSL
-    if [ "\$REVOKE_SSL" = "y" ]; then
-      certbot delete --cert-name "\$DOMAIN" --non-interactive 2>/dev/null || true
-      echo -e "\${GREEN}[OK]\${NC} SSL certificate revoked."
+if [ -n "$DOMAIN" ] && command -v certbot &>/dev/null; then
+  if certbot certificates 2>/dev/null | grep -q "$DOMAIN"; then
+    read -p "Revoke SSL certificate for $DOMAIN? (y/n): " REVOKE_SSL
+    if [ "$REVOKE_SSL" = "y" ]; then
+      certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null || true
+      echo -e "${GREEN}[OK]${NC} SSL certificate revoked."
     else
-      echo -e "\${YELLOW}[!!]\${NC} SSL certificate kept. Remove manually with: sudo certbot delete --cert-name \$DOMAIN"
+      echo -e "${YELLOW}[!!]${NC} SSL certificate kept. Remove manually with: sudo certbot delete --cert-name $DOMAIN"
     fi
   fi
 fi
 
 # Step 4: Remove app directory
-rm -rf "\$APP_DIR"
-echo -e "\${GREEN}[OK]\${NC} App directory removed."
+rm -rf "$APP_DIR"
+echo -e "${GREEN}[OK]${NC} App directory removed."
 
 echo ""
-echo -e "\${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
-echo -e "\${GREEN}  '\$APP_NAME' has been completely removed.\${NC}"
-echo -e "\${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}  '$APP_NAME' has been completely removed.${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 CMDEOF
   chmod +x /usr/local/bin/vps-remove-app
   log "vps-remove-app installed."
