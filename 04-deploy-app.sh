@@ -176,70 +176,25 @@ section "Step 2/6 — App Source"
 
 echo "How would you like to provide your app?"
 echo ""
-echo "  1) Git repository     — Clone from a GitHub/GitLab URL"
-echo "  2) Paste compose file — Paste your docker-compose.yml contents"
-echo "  3) Local folder       — Use an existing folder on this server"
+echo "  1) Paste compose file — Paste your docker-compose.yml (use this for registry images)"
+echo "  2) Registry image     — Pull a pre-built image from GHCR or Docker Hub"
 echo ""
 
 while true; do
-  read -p "Select [1-3]: " SOURCE_CHOICE
+  read -p "Select [1-2]: " SOURCE_CHOICE
   case "$SOURCE_CHOICE" in
-    1) SOURCE_TYPE="git"; break ;;
-    2) SOURCE_TYPE="paste"; break ;;
-    3) SOURCE_TYPE="local"; break ;;
-    *) warn "Enter 1, 2, or 3." ;;
+    1) SOURCE_TYPE="paste";    break ;;
+    2) SOURCE_TYPE="registry"; break ;;
+    *) warn "Enter 1 or 2." ;;
   esac
 done
 
 # --- Initialize defaults ---
-GIT_URL=""
-GIT_BRANCH=""
-GIT_TOKEN=""
-IS_PRIVATE="n"
+REGISTRY_IMAGE=""
+REGISTRY_HOST=""
+REGISTRY_USER=""
 
 case "$SOURCE_TYPE" in
-
-  # ─────────────────────────────────────────────
-  # SOURCE: Git Repository
-  # ─────────────────────────────────────────────
-  git)
-    echo ""
-    read -p "Git repository URL (HTTPS, e.g. https://github.com/user/repo.git): " GIT_URL
-    [ -z "$GIT_URL" ] && error "Git URL cannot be empty."
-
-    read -p "Branch to deploy (press ENTER for 'main'): " GIT_BRANCH
-    GIT_BRANCH=${GIT_BRANCH:-main}
-
-    echo ""
-    read -p "Is this a private repository? (y/n): " IS_PRIVATE
-
-    if [ "$IS_PRIVATE" = "y" ]; then
-      echo ""
-      echo "You need a Personal Access Token to clone a private repo."
-      echo "  GitHub: https://github.com/settings/tokens (scope: repo)"
-      echo "  GitLab: Settings > Access Tokens (scope: read_repository)"
-      echo ""
-      read -s -p "Paste your access token: " GIT_TOKEN; echo ""
-      [ -z "$GIT_TOKEN" ] && error "Access token cannot be empty for a private repo."
-    fi
-
-    echo ""
-    echo "Cloning repository..."
-
-    if [ -n "$GIT_TOKEN" ]; then
-      CLONE_URL=$(echo "$GIT_URL" | sed "s|https://|https://${GIT_TOKEN}@|")
-      git clone --branch "$GIT_BRANCH" "$CLONE_URL" "$APP_DIR" 2>&1 || error "Failed to clone repository. Check your URL, branch, and token."
-      cd "$APP_DIR"
-      git remote set-url origin "$GIT_URL"
-    else
-      git clone --branch "$GIT_BRANCH" "$GIT_URL" "$APP_DIR" 2>&1 || error "Failed to clone repository. Check your URL and branch."
-      cd "$APP_DIR"
-    fi
-
-    log "Repository cloned successfully."
-    log "  Branch: $GIT_BRANCH"
-    log "  Commit: $(git rev-parse --short HEAD)"
-    ;;
 
   # ─────────────────────────────────────────────
   # SOURCE: Paste docker-compose.yml
@@ -262,49 +217,65 @@ case "$SOURCE_TYPE" in
     ;;
 
   # ─────────────────────────────────────────────
-  # SOURCE: Local folder on the server
+  # SOURCE: Registry image (GHCR or Docker Hub)
   # ─────────────────────────────────────────────
-  local)
+  registry)
     echo ""
-    echo "Enter the full path to your app folder on this server."
-    echo "The folder should contain a docker-compose.yml and/or Dockerfile(s)."
+    echo "Pull a pre-built image from a container registry."
+    echo "  Examples:"
+    echo "    ghcr.io/alinaswe3/spotrev-marketplace:latest"
+    echo "    ghcr.io/alinaswe3/spotrev-marketplace:v1.0.2"
+    echo "    nginx:latest"
     echo ""
-    read -p "Folder path: " LOCAL_FOLDER
+    read -p "Image (e.g. ghcr.io/user/repo:tag): " REGISTRY_IMAGE
+    [ -z "$REGISTRY_IMAGE" ] && error "Image name cannot be empty."
 
-    # Validate
-    [ -z "$LOCAL_FOLDER" ] && error "Folder path cannot be empty."
-    [ ! -d "$LOCAL_FOLDER" ] && error "Folder '$LOCAL_FOLDER' does not exist."
-
-    # Check it has something useful
-    if [ ! -f "$LOCAL_FOLDER/docker-compose.yml" ] && [ ! -f "$LOCAL_FOLDER/docker-compose.yaml" ] && [ ! -f "$LOCAL_FOLDER/Dockerfile" ]; then
-      error "No docker-compose.yml or Dockerfile found in '$LOCAL_FOLDER'."
+    # Registry authentication
+    read -p "Does this registry require authentication? (y/n): " REGISTRY_AUTH
+    if [ "$REGISTRY_AUTH" = "y" ]; then
+      read -p "Registry hostname (e.g. ghcr.io): " REGISTRY_HOST
+      read -p "Registry username: " REGISTRY_USER
+      read -s -p "Registry token/password: " REGISTRY_TOKEN; echo ""
+      echo "$REGISTRY_TOKEN" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin \
+        || error "Registry login failed. Check your credentials."
+      log "Logged in to $REGISTRY_HOST."
     fi
 
-    # Copy into apps directory
-    echo "Copying files to $APP_DIR..."
-    cp -r "$LOCAL_FOLDER/." "$APP_DIR/"
-    log "Files copied from $LOCAL_FOLDER to $APP_DIR"
+    # Paste the compose file that references this image
+    echo ""
+    echo "Now paste your docker-compose.yml (must reference image: $REGISTRY_IMAGE)."
+    echo "When done, press ENTER on a new line, then press CTRL+D."
+    echo ""
+    echo "--- START PASTE ---"
+    COMPOSE_CONTENTS=$(cat)
+    echo "--- END PASTE ---"
+    [ -z "$COMPOSE_CONTENTS" ] && error "docker-compose.yml cannot be empty."
+    printf '%s\n' "$COMPOSE_CONTENTS" > "$APP_DIR/docker-compose.yml"
+    chmod 600 "$APP_DIR/docker-compose.yml"
+
+    # Pull the image now
+    echo "Pulling image from registry..."
+    docker pull "$REGISTRY_IMAGE" || error "Failed to pull image. Check the image name and credentials."
+    log "Image pulled: $REGISTRY_IMAGE"
+
+    # Save registry metadata for update script
+    cat > "$APP_DIR/.registry-info" << REGEOF
+REGISTRY_IMAGE=$REGISTRY_IMAGE
+REGISTRY_HOST=${REGISTRY_HOST:-}
+REGISTRY_USER=${REGISTRY_USER:-}
+REGEOF
+    chmod 600 "$APP_DIR/.registry-info"
     cd "$APP_DIR"
     ;;
 esac
 
-# --- Detect docker-compose.yml vs Dockerfile ---
-HAS_COMPOSE=false
-HAS_DOCKERFILE=false
-[ -f "$APP_DIR/docker-compose.yml" ] || [ -f "$APP_DIR/docker-compose.yaml" ] && HAS_COMPOSE=true
-[ -f "$APP_DIR/Dockerfile" ] && HAS_DOCKERFILE=true
-
-if [ "$HAS_COMPOSE" = false ] && [ "$HAS_DOCKERFILE" = false ]; then
-  error "No docker-compose.yml or Dockerfile found in the app directory. Your app must have one of these."
+# --- Verify compose file exists ---
+if [ ! -f "$APP_DIR/docker-compose.yml" ] && [ ! -f "$APP_DIR/docker-compose.yaml" ]; then
+  error "No docker-compose.yml found in $APP_DIR."
 fi
 
-if [ "$HAS_COMPOSE" = true ]; then
-  log "Found: docker-compose.yml"
-  DEPLOY_MODE="compose"
-else
-  log "Found: Dockerfile (no docker-compose.yml)"
-  DEPLOY_MODE="dockerfile"
-fi
+DEPLOY_MODE="compose"
+log "docker-compose.yml found."
 
 # =============================================================================
 # STEP 3: APP PORT
@@ -563,43 +534,20 @@ else
 fi
 
 # =============================================================================
-# STEP 6: BUILD & START
+# STEP 6: START APP
 # =============================================================================
-section "Step 6/6 — Building & Starting App"
+section "Step 6/6 — Starting App"
 
 cd "$APP_DIR"
 
-if [ "$DEPLOY_MODE" = "compose" ]; then
-  echo "Starting app with docker compose..."
-  docker compose up -d --build 2>&1
+echo "Starting containers..."
+if [ "$SOURCE_TYPE" = "registry" ]; then
+  # Image already pulled — just start
+  docker compose up -d --remove-orphans 2>&1
 else
-  # Dockerfile only — generate a minimal docker-compose.yml
-  echo "Generating docker-compose.yml from Dockerfile..."
-
-  # In local mode, bind to all interfaces for host access
-  if [ "$LOCAL_MODE" = true ]; then
-    PORT_BINDING="0.0.0.0:$APP_PORT:$APP_PORT"
-  else
-    PORT_BINDING="127.0.0.1:$APP_PORT:$APP_PORT"
-  fi
-
-  cat > "$APP_DIR/docker-compose.yml" << EOF
-services:
-  $APP_NAME:
-    build: .
-    container_name: $APP_NAME
-    restart: unless-stopped
-    ports:
-      - "$PORT_BINDING"
-$([ -f "$APP_DIR/.env" ] && echo "    env_file:" && echo "      - .env")
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-EOF
-
-  docker compose up -d --build 2>&1
+  # Paste/compose — pull any referenced images then start
+  docker compose pull 2>&1 || true
+  docker compose up -d --remove-orphans 2>&1
 fi
 
 # Wait and check health
@@ -636,16 +584,13 @@ APP_NAME=$APP_NAME
 APP_DIR=$APP_DIR
 APP_PORT=$APP_PORT
 SOURCE_TYPE=$SOURCE_TYPE
-GIT_URL=${GIT_URL:-}
-GIT_BRANCH=${GIT_BRANCH:-}
+REGISTRY_IMAGE=${REGISTRY_IMAGE:-}
 DEPLOY_MODE=$DEPLOY_MODE
 DOMAIN_NAME=${DOMAIN_NAME:-}
 DEPLOY_USER=$DEPLOY_USER
-IS_PRIVATE=${IS_PRIVATE:-n}
 SSL_ACTIVE=${SSL_ACTIVE:-false}
 LOCAL_MODE=$LOCAL_MODE
 DEPLOYED_AT=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-DEPLOYED_COMMIT=$(cd "$APP_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 EOF
 
 chmod 600 "$APP_DIR/.deploy-info"
@@ -677,18 +622,15 @@ echo "  App URL       : $APP_URL"
 echo "  App directory : $APP_DIR"
 echo "  App port      : $APP_PORT"
 echo "  Source        : $SOURCE_TYPE"
-[ "$SOURCE_TYPE" = "git" ] && echo "  Git branch    : $GIT_BRANCH"
-echo "  Deploy mode   : $DEPLOY_MODE"
+[ "$SOURCE_TYPE" = "registry" ] && echo "  Image         : $REGISTRY_IMAGE"
 echo "  SSL           : ${SSL_ACTIVE:-false}"
 echo ""
 echo "  WHAT WAS CONFIGURED"
 echo "  ───────────────────────────────────────────────"
-if [ "$SOURCE_TYPE" = "git" ]; then
-echo "  [OK] Repository cloned from $GIT_URL"
-elif [ "$SOURCE_TYPE" = "paste" ]; then
+if [ "$SOURCE_TYPE" = "paste" ]; then
 echo "  [OK] docker-compose.yml saved from pasted content"
-elif [ "$SOURCE_TYPE" = "local" ]; then
-echo "  [OK] Files copied from local folder"
+elif [ "$SOURCE_TYPE" = "registry" ]; then
+echo "  [OK] Image pulled from registry: $REGISTRY_IMAGE"
 fi
 if [ -f "$APP_DIR/.env" ]; then
 echo "  [OK] Environment variables configured"

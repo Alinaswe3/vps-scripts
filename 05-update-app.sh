@@ -70,9 +70,9 @@ echo -e "${BLUE}  APP UPDATE SCRIPT${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo "  This script will:"
-echo "    1. Back up your current app state"
-echo "    2. Pull latest code and/or update env vars"
-echo "    3. Rebuild and restart containers"
+echo "    1. Back up your current .env and compose file"
+echo "    2. Pull latest image (registry) or update env vars"
+echo "    3. Restart containers with new version"
 echo "    4. Roll back automatically if the app fails to start"
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -133,9 +133,9 @@ section "Step 2/4 — What to Update"
 
 echo "What would you like to update?"
 echo ""
-echo "  1) Code       — pull latest code from git, rebuild containers"
+echo "  1) Image      — pull a new image tag from registry, restart"
 echo "  2) Env vars   — edit environment variables, restart containers"
-echo "  3) Both       — update code and env vars"
+echo "  3) Both       — pull new image and update env vars"
 echo ""
 
 while true; do
@@ -158,109 +158,61 @@ mkdir -p "$BACKUP_DIR"
 
 echo "Creating backup before update..."
 
-# Backup .env if it exists
+# Backup .env
 [ -f "$APP_DIR/.env" ] && cp "$APP_DIR/.env" "$BACKUP_DIR/.env"
 
-# Backup docker-compose.yml
+# Backup compose file
 [ -f "$APP_DIR/docker-compose.yml" ] && cp "$APP_DIR/docker-compose.yml" "$BACKUP_DIR/docker-compose.yml"
 [ -f "$APP_DIR/docker-compose.yaml" ] && cp "$APP_DIR/docker-compose.yaml" "$BACKUP_DIR/docker-compose.yaml"
 
 # Backup deploy-info
 cp "$DEPLOY_INFO" "$BACKUP_DIR/.deploy-info"
 
-# Save current git commit
-PREVIOUS_COMMIT=$(cd "$APP_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-echo "$PREVIOUS_COMMIT" > "$BACKUP_DIR/.git-commit"
-
-# Save current docker images
-echo "Saving Docker images (this may take a moment)..."
+# Record currently running image digests — used to identify what to rollback to
 cd "$APP_DIR"
-COMPOSE_IMAGES=$(docker compose images -q 2>/dev/null | sort -u)
-if [ -n "$COMPOSE_IMAGES" ]; then
-  docker save $COMPOSE_IMAGES | gzip > "$BACKUP_DIR/images.tar.gz" 2>/dev/null || warn "Could not save Docker images (non-critical)."
-fi
+docker compose ps --format "{{.Image}}" 2>/dev/null > "$BACKUP_DIR/running-images.txt" || true
 
 chown -R "$DEPLOY_USER:$DEPLOY_USER" "$BACKUP_DIR"
 log "Backup saved to $BACKUP_DIR"
 
 # =============================================================================
-# UPDATE CODE
+# UPDATE IMAGE
 # =============================================================================
 if [ "$UPDATE_CODE" = true ]; then
-  section "Updating Code"
+  section "Pulling New Image"
 
   cd "$APP_DIR"
 
-  case "${SOURCE_TYPE:-git}" in
+  # Load registry info
+  REGISTRY_IMAGE=""
+  [ -f "$APP_DIR/.registry-info" ] && source "$APP_DIR/.registry-info"
 
-    git)
-      # Handle private repo re-authentication
-      if [ "${IS_PRIVATE:-n}" = "y" ]; then
-        echo "This is a private repository. You may need to provide your access token again."
-        read -p "Enter access token (or press ENTER to use existing): " NEW_TOKEN
-        if [ -n "$NEW_TOKEN" ]; then
-          AUTH_URL=$(echo "$GIT_URL" | sed "s|https://|https://${NEW_TOKEN}@|")
-          git remote set-url origin "$AUTH_URL"
-        fi
-      fi
+  # Fall back to reading image from compose file if .registry-info missing
+  if [ -z "$REGISTRY_IMAGE" ]; then
+    REGISTRY_IMAGE=$(grep "^\s*image:" "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1 | awk '{print $2}')
+  fi
+  [ -z "$REGISTRY_IMAGE" ] && error "Could not determine registry image. Check your docker-compose.yml has an 'image:' line."
 
-      echo "Pulling latest code from branch '$GIT_BRANCH'..."
-      git fetch origin "$GIT_BRANCH" 2>&1
-      git checkout "$GIT_BRANCH" 2>&1
-      git reset --hard "origin/$GIT_BRANCH" 2>&1
+  # Strip tag to get base image name
+  IMAGE_BASE="${REGISTRY_IMAGE%:*}"
 
-      NEW_COMMIT=$(git rev-parse --short HEAD)
+  echo "Current image : $REGISTRY_IMAGE"
+  echo ""
+  read -p "Image tag to deploy (press ENTER for 'latest'): " DEPLOY_TAG
+  DEPLOY_TAG=${DEPLOY_TAG:-latest}
 
-      # Strip token from remote URL for security
-      git remote set-url origin "$GIT_URL" 2>/dev/null || true
+  FULL_IMAGE="${IMAGE_BASE}:${DEPLOY_TAG}"
 
-      if [ "$PREVIOUS_COMMIT" = "$NEW_COMMIT" ]; then
-        log "Code is already up to date (commit: $NEW_COMMIT)."
-      else
-        log "Code updated: $PREVIOUS_COMMIT -> $NEW_COMMIT"
-      fi
-      ;;
+  echo "Pulling $FULL_IMAGE..."
+  docker pull "$FULL_IMAGE" || error "Failed to pull $FULL_IMAGE. Check the tag exists in the registry."
+  log "Image pulled: $FULL_IMAGE"
 
-    paste)
-      echo "This app was deployed by pasting a docker-compose.yml."
-      echo "To update, paste your new docker-compose.yml contents below."
-      echo "When done, press ENTER on a new line, then press CTRL+D."
-      echo "(Or type 'skip' and press CTRL+D to keep the current file.)"
-      echo ""
-      echo "--- START PASTE ---"
-      NEW_COMPOSE=$(cat)
-      echo "--- END PASTE ---"
+  # Update image reference in docker-compose.yml
+  sed -i "s|image: .*$(basename "$IMAGE_BASE").*|image: $FULL_IMAGE|" "$APP_DIR/docker-compose.yml" || true
 
-      if [ -n "$NEW_COMPOSE" ] && [ "$NEW_COMPOSE" != "skip" ]; then
-        echo "$NEW_COMPOSE" > "$APP_DIR/docker-compose.yml"
-        chmod 600 "$APP_DIR/docker-compose.yml"
-        log "docker-compose.yml updated."
-      else
-        log "Keeping existing docker-compose.yml."
-      fi
-      ;;
-
-    local)
-      echo "This app was deployed from a local folder."
-      read -p "Enter the folder path to copy updated files from (or press ENTER to skip): " UPDATE_FOLDER
-
-      if [ -n "$UPDATE_FOLDER" ]; then
-        if [ ! -d "$UPDATE_FOLDER" ]; then
-          warn "Folder '$UPDATE_FOLDER' does not exist. Skipping code update."
-        else
-          echo "Copying updated files from $UPDATE_FOLDER..."
-          cp -r "$UPDATE_FOLDER/." "$APP_DIR/"
-          log "Files updated from $UPDATE_FOLDER."
-        fi
-      else
-        log "Skipping code update."
-      fi
-      ;;
-
-    *)
-      warn "Unknown source type '${SOURCE_TYPE:-}'. Skipping code update."
-      ;;
-  esac
+  # Update .registry-info with new tag
+  sed -i "s|^REGISTRY_IMAGE=.*|REGISTRY_IMAGE=$FULL_IMAGE|" "$APP_DIR/.registry-info" 2>/dev/null || \
+    echo "REGISTRY_IMAGE=$FULL_IMAGE" >> "$APP_DIR/.registry-info"
 fi
 
 # =============================================================================
@@ -388,8 +340,8 @@ cd "$APP_DIR"
 echo "Stopping current containers..."
 docker compose down 2>&1
 
-echo "Building and starting containers..."
-docker compose up -d --build 2>&1
+echo "Starting containers with new version..."
+docker compose up -d --remove-orphans 2>&1
 
 # Health check
 echo ""
@@ -427,13 +379,6 @@ if [ "$APP_HEALTHY" = false ]; then
     echo "Stopping failed containers..."
     docker compose down 2>&1 || true
 
-    # Restore git state
-    if [ "$UPDATE_CODE" = true ] && [ -f "$BACKUP_DIR/.git-commit" ]; then
-      RESTORE_COMMIT=$(cat "$BACKUP_DIR/.git-commit")
-      echo "Restoring code to commit $RESTORE_COMMIT..."
-      git checkout "$RESTORE_COMMIT" 2>&1 || warn "Could not restore git commit."
-    fi
-
     # Restore .env
     if [ -f "$BACKUP_DIR/.env" ]; then
       cp "$BACKUP_DIR/.env" "$APP_DIR/.env"
@@ -441,18 +386,20 @@ if [ "$APP_HEALTHY" = false ]; then
       log "Environment variables restored."
     fi
 
-    # Restore docker-compose.yml if it was in backup
+    # Restore docker-compose.yml (has previous image tag)
     [ -f "$BACKUP_DIR/docker-compose.yml" ] && cp "$BACKUP_DIR/docker-compose.yml" "$APP_DIR/docker-compose.yml"
     [ -f "$BACKUP_DIR/docker-compose.yaml" ] && cp "$BACKUP_DIR/docker-compose.yaml" "$APP_DIR/docker-compose.yaml"
 
-    # Try loading saved images
-    if [ -f "$BACKUP_DIR/images.tar.gz" ]; then
-      echo "Restoring Docker images from backup..."
-      gunzip -c "$BACKUP_DIR/images.tar.gz" | docker load 2>/dev/null || warn "Could not restore images (will rebuild)."
+    # Show what image was running before
+    if [ -f "$BACKUP_DIR/running-images.txt" ]; then
+      PREV_IMAGE=$(head -1 "$BACKUP_DIR/running-images.txt")
+      warn "Previous image was: $PREV_IMAGE"
+      warn "Pulling previous image for rollback..."
+      docker pull "$PREV_IMAGE" 2>/dev/null || warn "Could not pull previous image — it may no longer exist in the registry."
     fi
 
     echo "Starting previous version..."
-    docker compose up -d --build 2>&1
+    docker compose up -d --remove-orphans 2>&1
 
     sleep 5
     if docker compose ps 2>/dev/null | grep -q "Up\|running"; then
@@ -471,9 +418,6 @@ fi
 # UPDATE DEPLOY INFO
 # =============================================================================
 if [ "$APP_HEALTHY" = true ]; then
-  # Update the deploy info with new commit
-  NEW_COMMIT=$(cd "$APP_DIR" && git rev-parse --short HEAD 2>/dev/null || echo "unknown")
-  sed -i "s/^DEPLOYED_COMMIT=.*/DEPLOYED_COMMIT=$NEW_COMMIT/" "$DEPLOY_INFO" 2>/dev/null || true
   sed -i "s/^DEPLOYED_AT=.*/DEPLOYED_AT=$(date -u +"%Y-%m-%d %H:%M:%S UTC")/" "$DEPLOY_INFO" 2>/dev/null || true
   chown -R "$DEPLOY_USER:$DEPLOY_USER" "$APP_DIR"
 fi
@@ -501,8 +445,7 @@ echo ""
 echo "  App name      : $APP_NAME"
 echo "  App URL       : $APP_URL"
 if [ "$UPDATE_CODE" = true ]; then
-echo "  Previous commit: $PREVIOUS_COMMIT"
-echo "  Current commit : $(cd "$APP_DIR" && git rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
+echo "  Image deployed: ${FULL_IMAGE:-latest}"
 fi
 echo "  Backup saved  : $BACKUP_DIR"
 echo ""
