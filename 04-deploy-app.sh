@@ -241,11 +241,6 @@ case "$SOURCE_TYPE" in
       log "Logged in to $REGISTRY_HOST."
     fi
 
-    # Pull the image now
-    echo "Pulling image from registry..."
-    docker pull "$REGISTRY_IMAGE" || error "Failed to pull image. Check the image name and credentials."
-    log "Image pulled: $REGISTRY_IMAGE"
-
     # Save registry metadata for update script
     cat > "$APP_DIR/.registry-info" << REGEOF
 REGISTRY_IMAGE=$REGISTRY_IMAGE
@@ -253,12 +248,82 @@ REGISTRY_HOST=${REGISTRY_HOST:-}
 REGISTRY_USER=${REGISTRY_USER:-}
 REGEOF
     chmod 600 "$APP_DIR/.registry-info"
-    NEEDS_COMPOSE_GEN=true
+
+    # How to provide the docker-compose.yml
+    echo ""
+    echo "How would you like to provide the docker-compose.yml?"
+    echo ""
+    echo "  1) Auto-generate  — Simple single-container setup (image + port + env)"
+    echo "  2) Paste compose  — Paste your docker-compose.yml contents"
+    echo "  3) Git repository — Clone a repo that contains docker-compose.yml + configs"
+    echo ""
+
+    while true; do
+      read -p "Select [1-3]: " COMPOSE_CHOICE
+      case "$COMPOSE_CHOICE" in
+        1) COMPOSE_SOURCE="auto";  break ;;
+        2) COMPOSE_SOURCE="paste"; break ;;
+        3) COMPOSE_SOURCE="git";   break ;;
+        *) warn "Enter 1, 2, or 3." ;;
+      esac
+    done
+
+    case "$COMPOSE_SOURCE" in
+      auto)
+        NEEDS_COMPOSE_GEN=true
+        log "Compose file will be auto-generated after port selection."
+        ;;
+      paste)
+        echo ""
+        echo "Paste your docker-compose.yml contents below."
+        echo "When done, press ENTER on a new line, then press CTRL+D."
+        echo ""
+        echo "--- START PASTE ---"
+        COMPOSE_CONTENTS=$(cat)
+        echo "--- END PASTE ---"
+        [ -z "$COMPOSE_CONTENTS" ] && error "docker-compose.yml contents cannot be empty."
+        printf '%s\n' "$COMPOSE_CONTENTS" > "$APP_DIR/docker-compose.yml"
+        chmod 600 "$APP_DIR/docker-compose.yml"
+        log "docker-compose.yml saved."
+        ;;
+      git)
+        echo ""
+        read -p "Git repository URL (HTTPS): " COMPOSE_REPO_URL
+        [ -z "$COMPOSE_REPO_URL" ] && error "Repository URL cannot be empty."
+        read -p "Branch (default: main): " COMPOSE_BRANCH
+        COMPOSE_BRANCH="${COMPOSE_BRANCH:-main}"
+
+        # Private repo support
+        read -p "Is this a private repository? (y/n): " COMPOSE_REPO_PRIVATE
+        if [ "$COMPOSE_REPO_PRIVATE" = "y" ]; then
+          read -s -p "Access token: " COMPOSE_REPO_TOKEN; echo ""
+          # Insert token into HTTPS URL: https://TOKEN@github.com/...
+          COMPOSE_CLONE_URL=$(echo "$COMPOSE_REPO_URL" | sed "s|https://|https://${COMPOSE_REPO_TOKEN}@|")
+        else
+          COMPOSE_CLONE_URL="$COMPOSE_REPO_URL"
+        fi
+
+        echo "Cloning repository..."
+        # Clone into a temp dir, then move contents into app dir
+        TEMP_CLONE=$(mktemp -d)
+        git clone --depth 1 --branch "$COMPOSE_BRANCH" "$COMPOSE_CLONE_URL" "$TEMP_CLONE" \
+          || error "Failed to clone repository. Check URL, branch, and credentials."
+        # Copy all files (except .git) into app directory
+        rsync -a --exclude='.git' "$TEMP_CLONE/" "$APP_DIR/"
+        rm -rf "$TEMP_CLONE"
+
+        if [ ! -f "$APP_DIR/docker-compose.yml" ] && [ ! -f "$APP_DIR/docker-compose.yaml" ]; then
+          error "No docker-compose.yml found in the cloned repository."
+        fi
+        log "Repository cloned. docker-compose.yml found."
+        ;;
+    esac
+
     cd "$APP_DIR"
     ;;
 esac
 
-# --- Verify compose file exists (skip for registry — generated after port question) ---
+# --- Verify compose file exists (skip for auto-generate — created after port question) ---
 if [ "${NEEDS_COMPOSE_GEN:-false}" != true ]; then
   if [ ! -f "$APP_DIR/docker-compose.yml" ] && [ ! -f "$APP_DIR/docker-compose.yaml" ]; then
     error "No docker-compose.yml found in $APP_DIR."
@@ -543,14 +608,8 @@ section "Step 6/6 — Starting App"
 cd "$APP_DIR"
 
 echo "Starting containers..."
-if [ "$SOURCE_TYPE" = "registry" ]; then
-  # Image already pulled — just start
-  docker compose up -d --remove-orphans 2>&1
-else
-  # Paste/compose — pull any referenced images then start
-  docker compose pull 2>&1 || true
-  docker compose up -d --remove-orphans 2>&1
-fi
+docker compose pull 2>&1 || true
+docker compose up -d --remove-orphans 2>&1
 
 # Wait and check health
 echo ""
