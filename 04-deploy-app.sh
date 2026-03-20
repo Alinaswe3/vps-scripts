@@ -6,13 +6,11 @@
 # =============================================================================
 #
 # PURPOSE:
-#   Clone a git repo, configure environment variables, build and start
-#   containers with Docker, set up nginx reverse proxy, and optionally
-#   configure SSL with certbot. Supports multiple apps on the same VPS.
+#   Clone a git repo, optionally configure environment variables,
+#   log into any private registries, and start the app with Docker.
 #
 # DEPENDENCIES:
-#   - 02-docker-install.sh (Docker must be installed)
-#   - 03-nginx-setup.sh (nginx must be installed)
+#   - Docker + Docker Compose plugin (02-docker-install.sh)
 #
 # USAGE:
 #   sudo bash 04-deploy-app.sh
@@ -24,143 +22,82 @@
 
 set -euo pipefail
 
-# --- Colors & Logging (self-contained) ---
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 log()     { echo -e "${GREEN}[OK]${NC} $1"; }
 warn()    { echo -e "${YELLOW}[!!]${NC} $1"; }
 error()   { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 section() { echo -e "\n${BLUE}══════════════════════════════════════${NC}\n${BLUE}  $1${NC}\n${BLUE}══════════════════════════════════════${NC}\n"; }
 
-# --- Detect public/local IP (works on VPS and VirtualBox) ---
-get_server_ip() {
-  local ip
-  if [ "$LOCAL_MODE" = true ]; then
-    ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
-    echo "${ip:-localhost}"
-    return
-  fi
-  ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null) || true
-  if [ -z "$ip" ]; then
-    ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
-  fi
-  echo "${ip:-unknown}"
-}
-
 # =============================================================================
-# PRE-FLIGHT CHECKS
+# PRE-FLIGHT
 # =============================================================================
 
-[ "$EUID" -ne 0 ] && error "This script must be run as root. Use: sudo bash 04-deploy-app.sh"
+[ "$EUID" -ne 0 ] && error "Run as root: sudo bash 04-deploy-app.sh"
+command -v docker &>/dev/null || error "Docker not installed. Run 02-docker-install.sh first."
+docker compose version &>/dev/null || error "Docker Compose plugin not found. Run 02-docker-install.sh first."
+command -v git &>/dev/null || error "Git not installed. Run: sudo apt install -y git"
 
-# Check dependencies
-if ! command -v docker &>/dev/null; then
-  error "Docker is not installed. Run 02-docker-install.sh first."
-fi
-
-if ! docker compose version &>/dev/null; then
-  error "Docker Compose plugin is not installed. Run 02-docker-install.sh first."
-fi
-
-if ! command -v nginx &>/dev/null; then
-  error "Nginx is not installed. Run 03-nginx-setup.sh first."
-fi
-
-# Detect deploy user (first non-root user with a home directory)
 DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
-if [ -z "$DEPLOY_USER" ]; then
-  error "No deploy user found. Run 01-vps-harden.sh first to create one."
-fi
+[ -z "$DEPLOY_USER" ] && error "No deploy user found. Run 01-vps-harden.sh first."
 DEPLOY_HOME="/home/$DEPLOY_USER"
 APPS_DIR="$DEPLOY_HOME/apps"
 mkdir -p "$APPS_DIR"
 
-# --- Auto-detect VirtualBox for local test mode ---
+# --- Auto-detect VirtualBox ---
 LOCAL_MODE=false
 if [ -f /sys/class/dmi/id/product_name ]; then
   PRODUCT_NAME=$(cat /sys/class/dmi/id/product_name 2>/dev/null || true)
   if echo "$PRODUCT_NAME" | grep -qi "virtualbox"; then
-    echo ""
-    warn "VirtualBox detected."
-    echo "  Local test mode binds nginx and Docker to all interfaces (0.0.0.0)"
-    echo "  so you can access the app from your host machine's browser."
-    echo ""
-    read -p "Run in local test mode? (y/n): " USE_LOCAL
-    if [ "$USE_LOCAL" = "y" ]; then
-      LOCAL_MODE=true
-      log "Local test mode enabled."
-      echo ""
-      echo "  Make sure VirtualBox port forwarding is configured:"
-      echo "    Host 2222 -> Guest 22   (SSH)"
-      echo "    Host 8080 -> Guest 80   (HTTP)"
-      echo "    Host 8443 -> Guest 443  (HTTPS)"
-      echo ""
-    fi
+    warn "VirtualBox detected — running in local test mode."
+    LOCAL_MODE=true
   fi
 fi
 
 # =============================================================================
-# WELCOME BANNER
+# WELCOME
 # =============================================================================
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${BLUE}  APP DEPLOYMENT SCRIPT${NC}"
+echo -e "${BLUE}  APP DEPLOYMENT${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-echo "  This script will:"
-echo "    1. Clone your app from a git repository"
-echo "    2. Configure environment variables"
-echo "    3. Build and start Docker containers"
-echo "    4. Set up nginx reverse proxy"
-echo "    5. Optionally configure SSL (HTTPS)"
-echo ""
-echo "  Deploy user: $DEPLOY_USER"
-echo "  Apps directory: $APPS_DIR"
+echo "  Deploy user : $DEPLOY_USER"
+echo "  Apps dir    : $APPS_DIR"
 echo ""
 
-# Show existing apps if any
 EXISTING_APPS=$(ls "$APPS_DIR" 2>/dev/null | head -20)
 if [ -n "$EXISTING_APPS" ]; then
-  echo "  Currently deployed apps:"
-  for app in $EXISTING_APPS; do
-    echo "    - $app"
-  done
+  echo "  Currently deployed:"
+  for app in $EXISTING_APPS; do echo "    - $app"; done
   echo ""
 fi
 
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-
-read -p "Ready to deploy an app? (y/n): " START_CONFIRM
+read -p "Ready to deploy? (y/n): " START_CONFIRM
 [ "$START_CONFIRM" != "y" ] && echo "Aborted." && exit 0
 
 # =============================================================================
-# STEP 1: APP IDENTITY
+# STEP 1: APP NAME
 # =============================================================================
-section "Step 1/6 — App Information"
+section "Step 1/5 — App Name"
 
-# App name
 while true; do
-  read -p "App name (lowercase, no spaces, e.g. myapp): " APP_NAME
+  read -p "App name (lowercase, no spaces, e.g. spotrev): " APP_NAME
   [[ "$APP_NAME" =~ ^[a-z0-9][a-z0-9_-]*$ ]] && break
-  warn "App name must start with a letter/number and contain only lowercase letters, numbers, hyphens or underscores."
+  warn "Lowercase letters, numbers, hyphens and underscores only."
 done
 
 APP_DIR="$APPS_DIR/$APP_NAME"
 
-# Check if app already exists
 if [ -d "$APP_DIR" ]; then
-  warn "An app named '$APP_NAME' is already deployed at $APP_DIR."
-  read -p "Remove existing deployment and redeploy? (y/n): " REDEPLOY
+  warn "'$APP_NAME' already exists at $APP_DIR."
+  read -p "Remove and redeploy? (y/n): " REDEPLOY
   if [ "$REDEPLOY" = "y" ]; then
-    echo "Stopping existing containers..."
     cd "$APP_DIR" && docker compose down 2>/dev/null || true
     cd /
     rm -rf "$APP_DIR"
-    # Remove old nginx config
-    rm -f "/etc/nginx/sites-enabled/$APP_NAME"
-    rm -f "/etc/nginx/sites-available/$APP_NAME"
-    nginx -t > /dev/null 2>&1 && systemctl reload nginx 2>/dev/null || true
-    log "Previous deployment of '$APP_NAME' removed."
+    log "Previous deployment removed."
   else
     echo "Aborted."
     exit 0
@@ -170,550 +107,283 @@ fi
 mkdir -p "$APP_DIR"
 
 # =============================================================================
-# STEP 2: APP SOURCE
+# STEP 2: CLONE REPOSITORY
 # =============================================================================
-section "Step 2/6 — App Source"
+section "Step 2/5 — Clone Repository"
 
-echo "How would you like to provide your app?"
+echo "Provide the HTTPS URL of your git repository."
+echo "  Public:  https://github.com/user/repo.git"
+echo "  Private: https://github.com/user/repo.git (token required)"
 echo ""
-echo "  1) Paste compose file — Paste your docker-compose.yml (use this for registry images)"
-echo "  2) Registry image     — Pull a pre-built image from GHCR or Docker Hub"
+
+read -p "Repository URL: " GIT_URL
+[ -z "$GIT_URL" ] && error "Repository URL cannot be empty."
+
+read -p "Branch (press ENTER for 'main'): " GIT_BRANCH
+GIT_BRANCH=${GIT_BRANCH:-main}
+
+read -p "Private repository? (y/n): " IS_PRIVATE
+GIT_TOKEN=""
+if [ "$IS_PRIVATE" = "y" ]; then
+  echo ""
+  echo "  Generate a token at: github.com/settings/tokens"
+  echo "  Required scope: repo (read access)"
+  echo ""
+  read -s -p "Personal Access Token: " GIT_TOKEN; echo ""
+  [ -z "$GIT_TOKEN" ] && error "Token required for private repositories."
+fi
+
+echo ""
+echo "Cloning $GIT_URL (branch: $GIT_BRANCH)..."
+
+if [ -n "$GIT_TOKEN" ]; then
+  CLONE_URL=$(echo "$GIT_URL" | sed "s|https://|https://${GIT_TOKEN}@|")
+  git clone --branch "$GIT_BRANCH" "$CLONE_URL" "$APP_DIR" 2>&1 \
+    || error "Clone failed. Check your URL, branch, and token."
+  # Strip token from remote immediately after clone
+  cd "$APP_DIR" && git remote set-url origin "$GIT_URL"
+else
+  git clone --branch "$GIT_BRANCH" "$GIT_URL" "$APP_DIR" 2>&1 \
+    || error "Clone failed. Check your URL and branch."
+  cd "$APP_DIR"
+fi
+
+log "Cloned successfully. Commit: $(git -C "$APP_DIR" rev-parse --short HEAD)"
+
+# =============================================================================
+# STEP 3: CHOOSE COMPOSE FILE
+# =============================================================================
+section "Step 3/5 — Choose Compose File"
+
+# Find all compose/dockerfile candidates in the repo
+echo "Compose and Dockerfile candidates found in repo:"
+echo ""
+CANDIDATES=()
+while IFS= read -r -d '' f; do
+  CANDIDATES+=("$(basename "$f")")
+  echo "  ${#CANDIDATES[@]}) $(basename "$f")"
+done < <(find "$APP_DIR" -maxdepth 2 \( \
+  -name "docker-compose.yml" \
+  -o -name "docker-compose.yaml" \
+  -o -name "docker-compose.*.yml" \
+  -o -name "docker-compose.*.yaml" \
+  -o -name "compose.yml" \
+  -o -name "compose.yaml" \
+  -o -name "Dockerfile" \
+\) -print0 2>/dev/null | sort -z)
+
+if [ ${#CANDIDATES[@]} -eq 0 ]; then
+  error "No docker-compose.yml or Dockerfile found in the repository."
+fi
+
 echo ""
 
-while true; do
-  read -p "Select [1-2]: " SOURCE_CHOICE
-  case "$SOURCE_CHOICE" in
-    1) SOURCE_TYPE="paste";    break ;;
-    2) SOURCE_TYPE="registry"; break ;;
-    *) warn "Enter 1 or 2." ;;
-  esac
-done
-
-# --- Initialize defaults ---
-REGISTRY_IMAGE=""
-REGISTRY_HOST=""
-REGISTRY_USER=""
-
-case "$SOURCE_TYPE" in
-
-  # ─────────────────────────────────────────────
-  # SOURCE: Paste docker-compose.yml
-  # ─────────────────────────────────────────────
-  paste)
-    echo ""
-    echo "Paste your docker-compose.yml contents below."
-    echo "When done, press ENTER on a new line, then press CTRL+D."
-    echo ""
-    echo "--- START PASTE ---"
-    COMPOSE_CONTENTS=$(cat)
-    echo "--- END PASTE ---"
-
-    [ -z "$COMPOSE_CONTENTS" ] && error "docker-compose.yml contents cannot be empty."
-
-    printf '%s\n' "$COMPOSE_CONTENTS" > "$APP_DIR/docker-compose.yml"
-    chmod 600 "$APP_DIR/docker-compose.yml"
-    log "docker-compose.yml saved to $APP_DIR"
-    cd "$APP_DIR"
-    ;;
-
-  # ─────────────────────────────────────────────
-  # SOURCE: Registry image (GHCR or Docker Hub)
-  # ─────────────────────────────────────────────
-  registry)
-    echo ""
-    echo "Pull a pre-built image from a container registry."
-    echo "  Examples:"
-    echo "    ghcr.io/alinaswe3/spotrev-marketplace:latest"
-    echo "    ghcr.io/alinaswe3/spotrev-marketplace:v1.0.2"
-    echo "    nginx:latest"
-    echo ""
-    read -p "Image (e.g. ghcr.io/user/repo:tag): " REGISTRY_IMAGE
-    [ -z "$REGISTRY_IMAGE" ] && error "Image name cannot be empty."
-
-    # Registry authentication
-    read -p "Does this registry require authentication? (y/n): " REGISTRY_AUTH
-    if [ "$REGISTRY_AUTH" = "y" ]; then
-      read -p "Registry hostname (e.g. ghcr.io): " REGISTRY_HOST
-      read -p "Registry username: " REGISTRY_USER
-      read -s -p "Registry token/password: " REGISTRY_TOKEN; echo ""
-      echo "$REGISTRY_TOKEN" | docker login "$REGISTRY_HOST" -u "$REGISTRY_USER" --password-stdin \
-        || error "Registry login failed. Check your credentials."
-      log "Logged in to $REGISTRY_HOST."
+COMPOSE_FILE=""
+if [ ${#CANDIDATES[@]} -eq 1 ]; then
+  COMPOSE_FILE=$(find "$APP_DIR" -maxdepth 2 -name "${CANDIDATES[0]}" | head -1)
+  log "Only one file found — using: ${CANDIDATES[0]}"
+else
+  while true; do
+    read -p "Select file [1-${#CANDIDATES[@]}]: " FILE_CHOICE
+    if [[ "$FILE_CHOICE" =~ ^[0-9]+$ ]] \
+      && [ "$FILE_CHOICE" -ge 1 ] \
+      && [ "$FILE_CHOICE" -le ${#CANDIDATES[@]} ]; then
+      CHOSEN_NAME="${CANDIDATES[$((FILE_CHOICE-1))]}"
+      COMPOSE_FILE=$(find "$APP_DIR" -maxdepth 2 -name "$CHOSEN_NAME" | head -1)
+      log "Using: $CHOSEN_NAME"
+      break
     fi
-
-    # Save registry metadata for update script
-    cat > "$APP_DIR/.registry-info" << REGEOF
-REGISTRY_IMAGE=$REGISTRY_IMAGE
-REGISTRY_HOST=${REGISTRY_HOST:-}
-REGISTRY_USER=${REGISTRY_USER:-}
-REGEOF
-    chmod 600 "$APP_DIR/.registry-info"
-
-    # How to provide the docker-compose.yml
-    echo ""
-    echo "How would you like to provide the docker-compose.yml?"
-    echo ""
-    echo "  1) Auto-generate  — Simple single-container setup (image + port + env)"
-    echo "  2) Paste compose  — Paste your docker-compose.yml contents"
-    echo "  3) Git repository — Clone a repo that contains docker-compose.yml + configs"
-    echo ""
-
-    while true; do
-      read -p "Select [1-3]: " COMPOSE_CHOICE
-      case "$COMPOSE_CHOICE" in
-        1) COMPOSE_SOURCE="auto";  break ;;
-        2) COMPOSE_SOURCE="paste"; break ;;
-        3) COMPOSE_SOURCE="git";   break ;;
-        *) warn "Enter 1, 2, or 3." ;;
-      esac
-    done
-
-    case "$COMPOSE_SOURCE" in
-      auto)
-        NEEDS_COMPOSE_GEN=true
-        log "Compose file will be auto-generated after port selection."
-        ;;
-      paste)
-        echo ""
-        echo "Paste your docker-compose.yml contents below."
-        echo "When done, press ENTER on a new line, then press CTRL+D."
-        echo ""
-        echo "--- START PASTE ---"
-        COMPOSE_CONTENTS=$(cat)
-        echo "--- END PASTE ---"
-        [ -z "$COMPOSE_CONTENTS" ] && error "docker-compose.yml contents cannot be empty."
-        printf '%s\n' "$COMPOSE_CONTENTS" > "$APP_DIR/docker-compose.yml"
-        chmod 600 "$APP_DIR/docker-compose.yml"
-        log "docker-compose.yml saved."
-        ;;
-      git)
-        echo ""
-        read -p "Git repository URL (HTTPS): " COMPOSE_REPO_URL
-        [ -z "$COMPOSE_REPO_URL" ] && error "Repository URL cannot be empty."
-        read -p "Branch (default: main): " COMPOSE_BRANCH
-        COMPOSE_BRANCH="${COMPOSE_BRANCH:-main}"
-
-        # Private repo support
-        read -p "Is this a private repository? (y/n): " COMPOSE_REPO_PRIVATE
-        if [ "$COMPOSE_REPO_PRIVATE" = "y" ]; then
-          read -s -p "Access token: " COMPOSE_REPO_TOKEN; echo ""
-          # Insert token into HTTPS URL: https://TOKEN@github.com/...
-          COMPOSE_CLONE_URL=$(echo "$COMPOSE_REPO_URL" | sed "s|https://|https://${COMPOSE_REPO_TOKEN}@|")
-        else
-          COMPOSE_CLONE_URL="$COMPOSE_REPO_URL"
-        fi
-
-        echo "Cloning repository..."
-        # Clone into a temp dir, then move contents into app dir
-        TEMP_CLONE=$(mktemp -d)
-        git clone --depth 1 --branch "$COMPOSE_BRANCH" "$COMPOSE_CLONE_URL" "$TEMP_CLONE" \
-          || error "Failed to clone repository. Check URL, branch, and credentials."
-        # Copy all files (except .git) into app directory
-        rsync -a --exclude='.git' "$TEMP_CLONE/" "$APP_DIR/"
-        rm -rf "$TEMP_CLONE"
-
-        if [ ! -f "$APP_DIR/docker-compose.yml" ] && [ ! -f "$APP_DIR/docker-compose.yaml" ]; then
-          error "No docker-compose.yml found in the cloned repository."
-        fi
-        log "Repository cloned. docker-compose.yml found."
-        ;;
-    esac
-
-    cd "$APP_DIR"
-    ;;
-esac
-
-# --- Verify compose file exists (skip for auto-generate — created after port question) ---
-if [ "${NEEDS_COMPOSE_GEN:-false}" != true ]; then
-  if [ ! -f "$APP_DIR/docker-compose.yml" ] && [ ! -f "$APP_DIR/docker-compose.yaml" ]; then
-    error "No docker-compose.yml found in $APP_DIR."
-  fi
-  log "docker-compose.yml found."
+    warn "Enter a number between 1 and ${#CANDIDATES[@]}."
+  done
 fi
 
-DEPLOY_MODE="compose"
-
-# =============================================================================
-# STEP 3: APP PORT
-# =============================================================================
-section "Step 3/6 — App Port"
-
-echo "What port does your app listen on inside the container?"
-echo "  Common ports: 3000 (Node.js), 8000 (Django), 8080 (Spring), 5000 (Flask)"
-echo ""
-
-while true; do
-  read -p "App port: " APP_PORT
-  [[ "$APP_PORT" =~ ^[0-9]+$ ]] && [ "$APP_PORT" -ge 1 ] && [ "$APP_PORT" -le 65535 ] && break
-  warn "Enter a valid port number between 1 and 65535."
-done
-
-log "App port set to $APP_PORT."
-
-# --- Auto-generate compose for registry images ---
-if [ "${NEEDS_COMPOSE_GEN:-false}" = true ]; then
-  PORT_BIND="127.0.0.1:$APP_PORT:$APP_PORT"
-  [ "$LOCAL_MODE" = true ] && PORT_BIND="0.0.0.0:$APP_PORT:$APP_PORT"
-  cat > "$APP_DIR/docker-compose.yml" << EOF
-services:
-  $APP_NAME:
-    image: $REGISTRY_IMAGE
-    ports:
-      - "$PORT_BIND"
-    restart: unless-stopped
-    env_file:
-      - .env
-EOF
-  chmod 600 "$APP_DIR/docker-compose.yml"
-  log "docker-compose.yml auto-generated for $REGISTRY_IMAGE"
-fi
+# Normalise — always reference as docker-compose.yml in APP_DIR
+COMPOSE_FILENAME=$(basename "$COMPOSE_FILE")
+COMPOSE_DIR=$(dirname "$COMPOSE_FILE")
 
 # =============================================================================
 # STEP 4: ENVIRONMENT VARIABLES
 # =============================================================================
-section "Step 4/6 — Environment Variables"
+section "Step 4/5 — Environment Variables"
 
-ENV_FILE="$APP_DIR/.env"
-HAS_ENV_EXAMPLE=false
+ENV_FILE="$COMPOSE_DIR/.env"
 
-# Check for .env.example
-if [ -f "$APP_DIR/.env.example" ]; then
-  HAS_ENV_EXAMPLE=true
-  echo "Found .env.example in your repository."
-  echo "We'll walk through each variable so you can set its value."
+if [ -f "$APP_DIR/.env.example" ] || [ -f "$COMPOSE_DIR/.env.example" ]; then
+  EXAMPLE_FILE="${COMPOSE_DIR}/.env.example"
+  [ ! -f "$EXAMPLE_FILE" ] && EXAMPLE_FILE="$APP_DIR/.env.example"
+
+  echo "Found .env.example — walking through each variable."
+  echo "Press ENTER to accept the default value shown in brackets."
   echo ""
 
-  # Read .env.example and prompt for each value
-> "$ENV_FILE"
+  > "$ENV_FILE"
   while IFS= read -r line || [ -n "$line" ]; do
-    # Pass through empty lines and comments unchanged
+    # Pass comments and blank lines through unchanged
     if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
       printf '%s\n' "$line" >> "$ENV_FILE"
       continue
     fi
 
-    # Skip lines without an = sign (not a valid KEY=VALUE)
-    if [[ "$line" != *"="* ]]; then
-      printf '%s\n' "$line" >> "$ENV_FILE"
-      continue
-    fi
+    # Skip lines without =
+    [[ "$line" != *"="* ]] && printf '%s\n' "$line" >> "$ENV_FILE" && continue
 
-    # Extract key — everything before the first =
+    # Extract key
     KEY="${line%%=*}"
-    # Trim whitespace from key (safe alternative to xargs)
     KEY="${KEY#"${KEY%%[![:space:]]*}"}"
     KEY="${KEY%"${KEY##*[![:space:]]}"}"
+    [ -z "$KEY" ] && printf '%s\n' "$line" >> "$ENV_FILE" && continue
 
-    # Skip if key is empty after trimming
-    if [ -z "$KEY" ]; then
-      printf '%s\n' "$line" >> "$ENV_FILE"
-      continue
-    fi
-
-    # Extract default value — everything after the first =
+    # Extract and clean default value
     DEFAULT_VAL="${line#*=}"
-
-    # Strip inline comments — handles all these formats:
-    #   KEY=value # comment          →  value
-    #   KEY="value" # comment        →  value
-    #   KEY='value' # comment        →  value
-    #   KEY="value # not a comment"  →  value # not a comment
-    #   KEY=http://url/#path         →  http://url/#path
     if [[ "$DEFAULT_VAL" =~ ^\"(.*)\"[[:space:]]*(\#.*)?$ ]]; then
-      # Double-quoted value: extract content between quotes
       DISPLAY_VAL="${BASH_REMATCH[1]}"
     elif [[ "$DEFAULT_VAL" =~ ^\'(.*)\'[[:space:]]*(\#.*)?$ ]]; then
-      # Single-quoted value: extract content between quotes
       DISPLAY_VAL="${BASH_REMATCH[1]}"
     else
-      # Unquoted value: strip trailing " #..." comments
       DISPLAY_VAL="${DEFAULT_VAL%% #*}"
-      # Trim trailing whitespace
       DISPLAY_VAL="${DISPLAY_VAL%"${DISPLAY_VAL##*[![:space:]]}"}"
     fi
 
     if [ -n "$DISPLAY_VAL" ]; then
       read -p "  $KEY [$DISPLAY_VAL]: " USER_VAL < /dev/tty || true
-      # Use default if user pressed ENTER
       USER_VAL="${USER_VAL:-$DISPLAY_VAL}"
     else
       read -p "  $KEY: " USER_VAL < /dev/tty || true
     fi
 
-    # Write KEY=VALUE — use printf to avoid expanding $, backticks, etc.
     printf '%s="%s"\n' "$KEY" "$USER_VAL" >> "$ENV_FILE"
-  done < "$APP_DIR/.env.example"
+  done < "$EXAMPLE_FILE"
 
   chmod 600 "$ENV_FILE"
-  log "Environment variables configured from .env.example."
+  log "Environment variables configured."
 
-elif [ -f "$APP_DIR/.env" ]; then
-  warn ".env file already exists in the repo (this is unusual — check it doesn't contain secrets in git)."
-  read -p "Use the existing .env? (y/n): " USE_EXISTING_ENV
-  if [ "$USE_EXISTING_ENV" != "y" ]; then
-    rm -f "$ENV_FILE"
-  fi
-fi
+elif [ -f "$ENV_FILE" ]; then
+  warn ".env already exists in repo — using it as-is."
+  warn "Make sure it does not contain real secrets committed to git."
 
-# If no .env exists yet, offer to create one
-if [ ! -f "$ENV_FILE" ]; then
-  read -p "Does your app need environment variables? (y/n): " NEEDS_ENV
+else
+  read -p "No .env.example found. Does this app need a .env file? (y/n): " NEEDS_ENV
   if [ "$NEEDS_ENV" = "y" ]; then
     echo ""
-    echo "Paste all your environment variables below (KEY=VALUE format, one per line)."
-    echo "When done, press ENTER on a new line, then press CTRL+D."
+    echo "Paste your .env contents below."
+    echo "Press ENTER on a new line then CTRL+D when done."
     echo ""
     echo "--- START PASTE ---"
     ENV_CONTENTS=$(cat)
     echo "--- END PASTE ---"
-
     if [ -n "$ENV_CONTENTS" ]; then
       printf '%s\n' "$ENV_CONTENTS" > "$ENV_FILE"
       chmod 600 "$ENV_FILE"
-      log "Environment variables saved."
-    else
-      log "No environment variables configured."
+      log ".env saved."
     fi
   else
-    log "No environment variables needed."
+    log "No .env configured."
   fi
 fi
 
 # =============================================================================
-# STEP 5: DOMAIN & NGINX
+# STEP 5: REGISTRY AUTH + PULL + START
 # =============================================================================
-section "Step 5/6 — Domain & Nginx"
+section "Step 5/5 — Registry Auth & Start"
 
-if [ "$LOCAL_MODE" = true ]; then
-  DOMAIN_NAME=""
-  SERVER_NAME="localhost"
-  log "Local test mode — server_name set to 'localhost'."
-else
-  read -p "Domain name for this app (e.g. myapp.example.com, or press ENTER for IP only): " DOMAIN_NAME
+# Detect private registry images in the chosen compose file
+PRIVATE_IMAGES=$(grep -E "^\s+image:\s+ghcr\.io|^\s+image:\s+[a-z0-9.-]+\.[a-z]{2,}/[^/]+/" \
+  "$COMPOSE_FILE" 2>/dev/null | awk '{print $2}' || true)
 
-  if [ -n "$DOMAIN_NAME" ]; then
-    SERVER_NAME="$DOMAIN_NAME"
-    log "Domain set to $DOMAIN_NAME."
-  else
-    SERVER_NAME="_"
-    log "No domain — app will be accessible via server IP."
-  fi
-fi
-
-# Write nginx config
-echo "Setting up nginx reverse proxy..."
-
-NGINX_ZONE=$(echo "${APP_NAME}" | tr -cs 'a-z0-9' '_' | sed 's/_$//')
-
-# In local mode, listen on all interfaces so host can reach via port forwarding
-if [ "$LOCAL_MODE" = true ]; then
-  LISTEN_DIRECTIVE="0.0.0.0:80"
-else
-  LISTEN_DIRECTIVE="80"
-fi
-
-cat > "/etc/nginx/sites-available/$APP_NAME" << EOF
-# Nginx config for $APP_NAME — generated by 04-deploy-app.sh
-
-limit_req_zone \$binary_remote_addr zone=${NGINX_ZONE}_rl:10m rate=30r/m;
-
-server {
-    listen $LISTEN_DIRECTIVE;
-    server_name $SERVER_NAME;
-
-    include snippets/security-headers.conf;
-
-    client_max_body_size 20M;
-
-    limit_req zone=${NGINX_ZONE}_rl burst=20 nodelay;
-
-    location / {
-        proxy_pass http://127.0.0.1:$APP_PORT;
-        include snippets/proxy-params.conf;
-    }
-
-    # Block sensitive files
-    location ~ /\. {
-        deny all;
-        return 404;
-    }
-
-    location ~* \.(env|log|sh|sql|bak|git)$ {
-        deny all;
-        return 404;
-    }
-}
-EOF
-
-ln -sf "/etc/nginx/sites-available/$APP_NAME" "/etc/nginx/sites-enabled/$APP_NAME"
-
-if nginx -t 2>&1; then
-  systemctl reload nginx
-  log "Nginx reverse proxy configured."
-  log "  $SERVER_NAME -> 127.0.0.1:$APP_PORT"
-else
-  error "Nginx config test failed. Check the configuration."
-fi
-
-# =============================================================================
-# STEP 5b: SSL CERTIFICATE (skipped in local test mode)
-# =============================================================================
-if [ "$LOCAL_MODE" = true ]; then
-  SSL_ACTIVE=false
-  log "SSL skipped — not available in local test mode."
-elif [ -n "$DOMAIN_NAME" ]; then
+if [ -n "$PRIVATE_IMAGES" ]; then
+  echo "Private registry image(s) detected:"
+  echo "$PRIVATE_IMAGES" | sed 's/^/  /'
   echo ""
-  SERVER_IP=$(get_server_ip)
-  read -p "Set up SSL (HTTPS) for $DOMAIN_NAME? (y/n): " SETUP_SSL
+  read -p "Log in to registry before pulling? (y/n): " DO_LOGIN
 
-  if [ "$SETUP_SSL" = "y" ]; then
-    echo ""
-    warn "Before SSL can work, your domain's DNS A record must point to: $SERVER_IP"
-    read -p "Is DNS already pointing to this server? (y/n): " DNS_READY
+  if [ "$DO_LOGIN" = "y" ]; then
+    # Extract hostname from first image
+    FIRST_IMAGE=$(echo "$PRIVATE_IMAGES" | head -1)
+    DEFAULT_HOST=$(echo "$FIRST_IMAGE" | cut -d'/' -f1)
 
-    if [ "$DNS_READY" = "y" ]; then
-      read -p "Email for SSL certificate notifications: " SSL_EMAIL
-      [ -z "$SSL_EMAIL" ] && error "Email is required for SSL certificates."
+    read -p "Registry hostname [$DEFAULT_HOST]: " REG_HOST
+    REG_HOST="${REG_HOST:-$DEFAULT_HOST}"
+    read -p "Registry username: " REG_USER
+    read -s -p "Registry token/password: " REG_TOKEN; echo ""
 
-      echo ""
-      echo "Running SSL verification (dry run)..."
-      if certbot --nginx -d "$DOMAIN_NAME" --non-interactive --agree-tos --email "$SSL_EMAIL" --dry-run 2>&1; then
-        log "Verification passed. Installing SSL certificate..."
-        certbot --nginx -d "$DOMAIN_NAME" --non-interactive --agree-tos --email "$SSL_EMAIL" --redirect
-        log "SSL certificate installed. HTTPS is now active."
-        SSL_ACTIVE=true
-      else
-        warn "SSL verification failed. This usually means DNS is not pointing to this server yet."
-        warn "You can set up SSL later by running:"
-        warn "  sudo certbot --nginx -d $DOMAIN_NAME"
-        SSL_ACTIVE=false
-      fi
-    else
-      warn "SSL skipped. When DNS is ready, run:"
-      warn "  sudo certbot --nginx -d $DOMAIN_NAME"
-      SSL_ACTIVE=false
-    fi
-  else
-    SSL_ACTIVE=false
+    echo "$REG_TOKEN" | docker login "$REG_HOST" -u "$REG_USER" --password-stdin \
+      || error "Registry login failed. Check your credentials."
+    log "Logged in to $REG_HOST."
   fi
-else
-  SSL_ACTIVE=false
 fi
 
-# =============================================================================
-# STEP 6: START APP
-# =============================================================================
-section "Step 6/6 — Starting App"
-
-cd "$APP_DIR"
-
-echo "Starting containers..."
-docker compose pull 2>&1 || true
-docker compose up -d --remove-orphans 2>&1
-
-# Wait and check health
+# Pull images and start
 echo ""
-echo "Waiting for app to start..."
+echo "Pulling images and starting containers..."
+cd "$COMPOSE_DIR"
+
+docker compose -f "$COMPOSE_FILENAME" pull 2>&1 \
+  || warn "Some images could not be pulled — check registry credentials."
+
+docker compose -f "$COMPOSE_FILENAME" up -d --remove-orphans 2>&1
+
+# Health check
+echo ""
+echo "Waiting for containers to start..."
 sleep 5
 
 APP_HEALTHY=false
 for i in {1..12}; do
-  if docker compose ps 2>/dev/null | grep -q "Up\|running"; then
+  if docker compose -f "$COMPOSE_FILENAME" ps 2>/dev/null | grep -q "Up\|running\|healthy"; then
     APP_HEALTHY=true
     break
   fi
-  echo "  Checking... (attempt $i/12)"
+  echo "  Checking... ($i/12)"
   sleep 5
 done
-
-if [ "$APP_HEALTHY" = true ]; then
-  log "App is running."
-else
-  warn "App may not have started correctly. Check logs with:"
-  warn "  cd $APP_DIR && docker compose logs"
-fi
 
 # =============================================================================
 # SAVE DEPLOYMENT METADATA
 # =============================================================================
-
 cat > "$APP_DIR/.deploy-info" << EOF
-# Deployment metadata — generated by 04-deploy-app.sh
-# Used by 05-update-app.sh for updates and rollbacks
-
 APP_NAME=$APP_NAME
 APP_DIR=$APP_DIR
-APP_PORT=$APP_PORT
-SOURCE_TYPE=$SOURCE_TYPE
-REGISTRY_IMAGE=${REGISTRY_IMAGE:-}
-DEPLOY_MODE=$DEPLOY_MODE
-DOMAIN_NAME=${DOMAIN_NAME:-}
-DEPLOY_USER=$DEPLOY_USER
-SSL_ACTIVE=${SSL_ACTIVE:-false}
+COMPOSE_FILE=$COMPOSE_FILE
+COMPOSE_DIR=$COMPOSE_DIR
+COMPOSE_FILENAME=$COMPOSE_FILENAME
+GIT_URL=$GIT_URL
+GIT_BRANCH=$GIT_BRANCH
+IS_PRIVATE=${IS_PRIVATE:-n}
 LOCAL_MODE=$LOCAL_MODE
+DEPLOY_USER=$DEPLOY_USER
 DEPLOYED_AT=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+DEPLOYED_COMMIT=$(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
 EOF
 
 chmod 600 "$APP_DIR/.deploy-info"
 chown -R "$DEPLOY_USER:$DEPLOY_USER" "$APP_DIR"
-log "Deployment metadata saved."
 
 # =============================================================================
 # DONE
 # =============================================================================
-SERVER_IP=$(get_server_ip)
-
-if [ "$LOCAL_MODE" = true ]; then
-  APP_URL="http://localhost:8080 (via VirtualBox port forwarding)"
-elif [ "${SSL_ACTIVE:-false}" = true ]; then
-  APP_URL="https://$DOMAIN_NAME"
-elif [ -n "${DOMAIN_NAME:-}" ]; then
-  APP_URL="http://$DOMAIN_NAME"
-else
-  APP_URL="http://$SERVER_IP"
-fi
-
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}  DEPLOYMENT COMPLETE${NC}"
+
+if [ "$APP_HEALTHY" = true ]; then
+  echo -e "${GREEN}  DEPLOYMENT COMPLETE${NC}"
+else
+  echo -e "${YELLOW}  DEPLOYMENT COMPLETE (containers may still be starting)${NC}"
+fi
+
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo "  App name      : $APP_NAME"
-echo "  App URL       : $APP_URL"
 echo "  App directory : $APP_DIR"
-echo "  App port      : $APP_PORT"
-echo "  Source        : $SOURCE_TYPE"
-[ "$SOURCE_TYPE" = "registry" ] && echo "  Image         : $REGISTRY_IMAGE"
-echo "  SSL           : ${SSL_ACTIVE:-false}"
-echo ""
-echo "  WHAT WAS CONFIGURED"
-echo "  ───────────────────────────────────────────────"
-if [ "$SOURCE_TYPE" = "paste" ]; then
-echo "  [OK] docker-compose.yml saved from pasted content"
-elif [ "$SOURCE_TYPE" = "registry" ]; then
-echo "  [OK] Image pulled from registry: $REGISTRY_IMAGE"
-fi
-if [ -f "$APP_DIR/.env" ]; then
-echo "  [OK] Environment variables configured"
-fi
-echo "  [OK] Docker containers built and started"
-echo "  [OK] Nginx reverse proxy active"
-if [ "${SSL_ACTIVE:-false}" = true ]; then
-echo "  [OK] SSL certificate installed (auto-renews)"
-fi
+echo "  Compose file  : $COMPOSE_FILENAME"
+echo "  Git branch    : $GIT_BRANCH"
+echo "  Commit        : $(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo 'unknown')"
 echo ""
 echo "  USEFUL COMMANDS"
 echo "  ───────────────────────────────────────────────"
-echo "  Update app     : sudo bash 05-update-app.sh"
-echo "  View logs      : cd $APP_DIR && docker compose logs -f"
-echo "  Stop app       : cd $APP_DIR && docker compose down"
-echo "  Start app      : cd $APP_DIR && docker compose up -d"
-echo "  Restart app    : cd $APP_DIR && docker compose restart"
-echo ""
-echo "  NEXT STEPS"
-echo "  ───────────────────────────────────────────────"
-echo "  1. Visit $APP_URL to verify your app is running"
-echo "  2. To deploy another app, run this script again"
-echo "  3. To update this app later, run: sudo bash 05-update-app.sh"
+echo "  View logs   : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILENAME logs -f"
+echo "  Status      : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILENAME ps"
+echo "  Stop        : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILENAME down"
+echo "  Restart     : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILENAME restart"
+echo "  Update      : sudo bash 05-update-app.sh"
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

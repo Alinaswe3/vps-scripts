@@ -83,7 +83,6 @@ echo ""
 # =============================================================================
 section "Step 1/4 — Select App to Update"
 
-# List deployed apps
 DEPLOYED_APPS=()
 if [ -d "$APPS_DIR" ]; then
   for dir in "$APPS_DIR"/*/; do
@@ -91,18 +90,16 @@ if [ -d "$APPS_DIR" ]; then
   done
 fi
 
-if [ ${#DEPLOYED_APPS[@]} -eq 0 ]; then
-  error "No deployed apps found. Deploy an app first with 04-deploy-app.sh."
-fi
+[ ${#DEPLOYED_APPS[@]} -eq 0 ] && error "No deployed apps found. Deploy one first with 04-deploy-app.sh."
 
 echo "Deployed apps:"
 echo ""
 for i in "${!DEPLOYED_APPS[@]}"; do
   APP="${DEPLOYED_APPS[$i]}"
   APP_INFO="$APPS_DIR/$APP/.deploy-info"
-  DOMAIN=$(grep "^DOMAIN_NAME=" "$APP_INFO" 2>/dev/null | cut -d= -f2-)
   COMMIT=$(grep "^DEPLOYED_COMMIT=" "$APP_INFO" 2>/dev/null | cut -d= -f2-)
-  echo "  $((i+1))) $APP ${DOMAIN:+(${DOMAIN})} ${COMMIT:+(commit: ${COMMIT})}"
+  BRANCH=$(grep "^GIT_BRANCH=" "$APP_INFO" 2>/dev/null | cut -d= -f2-)
+  echo "  $((i+1))) $APP ${BRANCH:+(branch: $BRANCH)} ${COMMIT:+(commit: $COMMIT)}"
 done
 echo ""
 
@@ -118,13 +115,12 @@ done
 APP_DIR="$APPS_DIR/$APP_NAME"
 DEPLOY_INFO="$APP_DIR/.deploy-info"
 
-# Load deployment metadata
 source "$DEPLOY_INFO"
 
-log "Selected: $APP_NAME"
-log "  Directory: $APP_DIR"
-log "  Branch: ${GIT_BRANCH:-unknown}"
-log "  Domain: ${DOMAIN_NAME:-none}"
+log "Selected : $APP_NAME"
+log "Branch   : ${GIT_BRANCH:-unknown}"
+log "Commit   : ${DEPLOYED_COMMIT:-unknown}"
+log "Compose  : ${COMPOSE_FILENAME:-docker-compose.yml}"
 
 # =============================================================================
 # WHAT TO UPDATE
@@ -158,19 +154,22 @@ mkdir -p "$BACKUP_DIR"
 
 echo "Creating backup before update..."
 
-# Backup .env
-[ -f "$APP_DIR/.env" ] && cp "$APP_DIR/.env" "$BACKUP_DIR/.env"
+# Use compose location from deploy-info, fall back to app dir
+_BACKUP_COMPOSE_DIR="${COMPOSE_DIR:-$APP_DIR}"
+_BACKUP_COMPOSE_FILE="${COMPOSE_FILENAME:-docker-compose.yml}"
+
+# Backup .env (lives next to the compose file)
+[ -f "$_BACKUP_COMPOSE_DIR/.env" ] && cp "$_BACKUP_COMPOSE_DIR/.env" "$BACKUP_DIR/.env"
 
 # Backup compose file
-[ -f "$APP_DIR/docker-compose.yml" ] && cp "$APP_DIR/docker-compose.yml" "$BACKUP_DIR/docker-compose.yml"
-[ -f "$APP_DIR/docker-compose.yaml" ] && cp "$APP_DIR/docker-compose.yaml" "$BACKUP_DIR/docker-compose.yaml"
+[ -f "$_BACKUP_COMPOSE_DIR/$_BACKUP_COMPOSE_FILE" ] && cp "$_BACKUP_COMPOSE_DIR/$_BACKUP_COMPOSE_FILE" "$BACKUP_DIR/$_BACKUP_COMPOSE_FILE"
 
 # Backup deploy-info
 cp "$DEPLOY_INFO" "$BACKUP_DIR/.deploy-info"
 
 # Record currently running image digests — used to identify what to rollback to
-cd "$APP_DIR"
-docker compose ps --format "{{.Image}}" 2>/dev/null > "$BACKUP_DIR/running-images.txt" || true
+cd "$_BACKUP_COMPOSE_DIR"
+docker compose -f "$_BACKUP_COMPOSE_FILE" ps --format "{{.Image}}" 2>/dev/null > "$BACKUP_DIR/running-images.txt" || true
 
 chown -R "$DEPLOY_USER:$DEPLOY_USER" "$BACKUP_DIR"
 log "Backup saved to $BACKUP_DIR"
@@ -181,38 +180,54 @@ log "Backup saved to $BACKUP_DIR"
 if [ "$UPDATE_CODE" = true ]; then
   section "Pulling New Image"
 
-  cd "$APP_DIR"
+  # Use compose location from deploy-info, fall back to app dir
+  COMPOSE_DIR="${COMPOSE_DIR:-$APP_DIR}"
+  COMPOSE_FILENAME="${COMPOSE_FILENAME:-docker-compose.yml}"
 
-  # Load registry info
-  REGISTRY_IMAGE=""
-  [ -f "$APP_DIR/.registry-info" ] && source "$APP_DIR/.registry-info"
+  cd "$COMPOSE_DIR"
 
-  # Fall back to reading image from compose file if .registry-info missing
-  if [ -z "$REGISTRY_IMAGE" ]; then
-    REGISTRY_IMAGE=$(grep "^\s*image:" "$APP_DIR/docker-compose.yml" 2>/dev/null | head -1 | awk '{print $2}')
+  # Detect private images and offer registry login
+  PRIVATE_IMAGES=$(grep -E "^\s+image:\s+ghcr\.io|^\s+image:\s+[a-z0-9.-]+\.[a-z]{2,}/[^/]+/" \
+    "$COMPOSE_FILENAME" 2>/dev/null | awk '{print $2}' || true)
+
+  if [ -n "$PRIVATE_IMAGES" ]; then
+    echo "Private registry image(s) detected:"
+    echo "$PRIVATE_IMAGES" | sed 's/^/  /'
+    echo ""
+    read -p "Log in to registry before pulling? (y/n): " DO_LOGIN
+    if [ "$DO_LOGIN" = "y" ]; then
+      FIRST_IMAGE=$(echo "$PRIVATE_IMAGES" | head -1)
+      DEFAULT_HOST=$(echo "$FIRST_IMAGE" | cut -d'/' -f1)
+      read -p "Registry hostname [$DEFAULT_HOST]: " REG_HOST
+      REG_HOST="${REG_HOST:-$DEFAULT_HOST}"
+      read -p "Registry username: " REG_USER
+      read -s -p "Registry token/password: " REG_TOKEN; echo ""
+      echo "$REG_TOKEN" | docker login "$REG_HOST" -u "$REG_USER" --password-stdin \
+        || error "Registry login failed."
+      log "Logged in to $REG_HOST."
+    fi
   fi
-  [ -z "$REGISTRY_IMAGE" ] && error "Could not determine registry image. Check your docker-compose.yml has an 'image:' line."
 
-  # Strip tag to get base image name
-  IMAGE_BASE="${REGISTRY_IMAGE%:*}"
+  # Ask for specific image tag if registry image present
+  if [ -n "$PRIVATE_IMAGES" ]; then
+    IMAGE_BASE=$(echo "$PRIVATE_IMAGES" | head -1 | sed 's/:.*//')
+    CURRENT_TAG=$(echo "$PRIVATE_IMAGES" | head -1 | grep -o ':.*' | sed 's/://' || echo "latest")
+    echo ""
+    echo "  Current tag: $CURRENT_TAG"
+    read -p "  Tag to deploy (press ENTER for '$CURRENT_TAG'): " DEPLOY_TAG
+    DEPLOY_TAG="${DEPLOY_TAG:-$CURRENT_TAG}"
 
-  echo "Current image : $REGISTRY_IMAGE"
-  echo ""
-  read -p "Image tag to deploy (press ENTER for 'latest'): " DEPLOY_TAG
-  DEPLOY_TAG=${DEPLOY_TAG:-latest}
+    if [ "$DEPLOY_TAG" != "$CURRENT_TAG" ]; then
+      FULL_IMAGE="${IMAGE_BASE}:${DEPLOY_TAG}"
+      echo "  Updating image tag to $FULL_IMAGE in $COMPOSE_FILENAME..."
+      sed -i "s|image: ${IMAGE_BASE}:${CURRENT_TAG}|image: $FULL_IMAGE|g" "$COMPOSE_FILENAME" || true
+    fi
+  fi
 
-  FULL_IMAGE="${IMAGE_BASE}:${DEPLOY_TAG}"
-
-  echo "Pulling $FULL_IMAGE..."
-  docker pull "$FULL_IMAGE" || error "Failed to pull $FULL_IMAGE. Check the tag exists in the registry."
-  log "Image pulled: $FULL_IMAGE"
-
-  # Update image reference in docker-compose.yml
-  sed -i "s|image: .*$(basename "$IMAGE_BASE").*|image: $FULL_IMAGE|" "$APP_DIR/docker-compose.yml" || true
-
-  # Update .registry-info with new tag
-  sed -i "s|^REGISTRY_IMAGE=.*|REGISTRY_IMAGE=$FULL_IMAGE|" "$APP_DIR/.registry-info" 2>/dev/null || \
-    echo "REGISTRY_IMAGE=$FULL_IMAGE" >> "$APP_DIR/.registry-info"
+  echo "Pulling latest images..."
+  docker compose -f "$COMPOSE_FILENAME" pull \
+    || warn "Some images could not be pulled. Check registry credentials."
+  log "Images pulled."
 fi
 
 # =============================================================================
@@ -221,7 +236,7 @@ fi
 if [ "$UPDATE_ENV" = true ]; then
   section "Updating Environment Variables"
 
-  ENV_FILE="$APP_DIR/.env"
+  ENV_FILE="${COMPOSE_DIR:-$APP_DIR}/.env"
 
   if [ -f "$ENV_FILE" ]; then
     echo "Current environment variables:"
@@ -311,21 +326,17 @@ if [ "$UPDATE_ENV" = true ]; then
     read -p "No .env file exists. Create one? (y/n): " CREATE_ENV
     if [ "$CREATE_ENV" = "y" ]; then
       echo ""
-      echo "Enter environment variables one at a time (KEY=VALUE)."
-      echo "Press ENTER on an empty line when done."
+      echo "Paste your .env contents below (KEY=VALUE format, one per line)."
+      echo "Press ENTER on a new line then CTRL+D when done."
       echo ""
-      > "$ENV_FILE"
-      while true; do
-        read -p "  Variable (or ENTER to finish): " ENV_LINE
-        [ -z "$ENV_LINE" ] && break
-        if [[ "$ENV_LINE" == *"="* ]]; then
-          echo "$ENV_LINE" >> "$ENV_FILE"
-        else
-          warn "Format must be KEY=VALUE."
-        fi
-      done
-      chmod 600 "$ENV_FILE"
-      log "Environment file created."
+      echo "--- START PASTE ---"
+      ENV_CONTENTS=$(cat)
+      echo "--- END PASTE ---"
+      if [ -n "$ENV_CONTENTS" ]; then
+        printf '%s\n' "$ENV_CONTENTS" > "$ENV_FILE"
+        chmod 600 "$ENV_FILE"
+        log ".env saved."
+      fi
     fi
   fi
 fi
@@ -333,15 +344,17 @@ fi
 # =============================================================================
 # REBUILD & RESTART
 # =============================================================================
-section "Step 4/4 — Rebuilding & Restarting"
+section "Step 4/4 — Restarting"
 
-cd "$APP_DIR"
+_COMPOSE_DIR="${COMPOSE_DIR:-$APP_DIR}"
+_COMPOSE_FILE="${COMPOSE_FILENAME:-docker-compose.yml}"
+cd "$_COMPOSE_DIR"
 
 echo "Stopping current containers..."
-docker compose down 2>&1
+docker compose -f "$_COMPOSE_FILE" down 2>&1
 
 echo "Starting containers with new version..."
-docker compose up -d --remove-orphans 2>&1
+docker compose -f "$_COMPOSE_FILE" up -d --remove-orphans 2>&1
 
 # Health check
 echo ""
@@ -350,7 +363,7 @@ sleep 5
 
 APP_HEALTHY=false
 for i in {1..12}; do
-  if docker compose ps 2>/dev/null | grep -q "Up\|running"; then
+  if docker compose -f "$_COMPOSE_FILE" ps 2>/dev/null | grep -q "Up\|running"; then
     APP_HEALTHY=true
     break
   fi
@@ -367,7 +380,7 @@ if [ "$APP_HEALTHY" = false ]; then
   echo ""
   echo "Recent container logs:"
   echo "───────────────────────────────────────────────"
-  docker compose logs --tail=20 2>/dev/null || true
+  docker compose -f "$_COMPOSE_FILE" logs --tail=20 2>/dev/null || true
   echo "───────────────────────────────────────────────"
   echo ""
 
@@ -377,38 +390,38 @@ if [ "$APP_HEALTHY" = false ]; then
     section "Rolling Back"
 
     echo "Stopping failed containers..."
-    docker compose down 2>&1 || true
+    docker compose -f "$_COMPOSE_FILE" down 2>&1 || true
 
     # Restore .env
     if [ -f "$BACKUP_DIR/.env" ]; then
-      cp "$BACKUP_DIR/.env" "$APP_DIR/.env"
-      chmod 600 "$APP_DIR/.env"
+      cp "$BACKUP_DIR/.env" "$_COMPOSE_DIR/.env"
+      chmod 600 "$_COMPOSE_DIR/.env"
       log "Environment variables restored."
     fi
 
-    # Restore docker-compose.yml (has previous image tag)
-    [ -f "$BACKUP_DIR/docker-compose.yml" ] && cp "$BACKUP_DIR/docker-compose.yml" "$APP_DIR/docker-compose.yml"
-    [ -f "$BACKUP_DIR/docker-compose.yaml" ] && cp "$BACKUP_DIR/docker-compose.yaml" "$APP_DIR/docker-compose.yaml"
+    # Restore compose file (has previous image tag)
+    [ -f "$BACKUP_DIR/docker-compose.yml" ] && cp "$BACKUP_DIR/docker-compose.yml" "$_COMPOSE_DIR/docker-compose.yml"
+    [ -f "$BACKUP_DIR/docker-compose.yaml" ] && cp "$BACKUP_DIR/docker-compose.yaml" "$_COMPOSE_DIR/docker-compose.yaml"
 
-    # Show what image was running before
+    # Pull previous image if known
     if [ -f "$BACKUP_DIR/running-images.txt" ]; then
       PREV_IMAGE=$(head -1 "$BACKUP_DIR/running-images.txt")
-      warn "Previous image was: $PREV_IMAGE"
-      warn "Pulling previous image for rollback..."
-      docker pull "$PREV_IMAGE" 2>/dev/null || warn "Could not pull previous image — it may no longer exist in the registry."
+      warn "Previous image: $PREV_IMAGE"
+      docker pull "$PREV_IMAGE" 2>/dev/null \
+        || warn "Could not pull previous image — it may no longer exist in the registry."
     fi
 
     echo "Starting previous version..."
-    docker compose up -d --remove-orphans 2>&1
+    docker compose -f "$_COMPOSE_FILE" up -d --remove-orphans 2>&1
 
     sleep 5
-    if docker compose ps 2>/dev/null | grep -q "Up\|running"; then
-      log "Rollback successful. App is running on the previous version."
+    if docker compose -f "$_COMPOSE_FILE" ps 2>/dev/null | grep -q "Up\|running"; then
+      log "Rollback successful."
     else
-      error "Rollback also failed. Check logs: cd $APP_DIR && docker compose logs"
+      error "Rollback also failed. Check logs: cd $_COMPOSE_DIR && docker compose -f $_COMPOSE_FILE logs"
     fi
   else
-    warn "Not rolling back. Debug with: cd $APP_DIR && docker compose logs"
+    warn "Not rolling back. Debug with: cd $_COMPOSE_DIR && docker compose -f $_COMPOSE_FILE logs"
   fi
 else
   log "App is running."
