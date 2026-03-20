@@ -241,18 +241,6 @@ case "$SOURCE_TYPE" in
       log "Logged in to $REGISTRY_HOST."
     fi
 
-    # Paste the compose file that references this image
-    echo ""
-    echo "Now paste your docker-compose.yml (must reference image: $REGISTRY_IMAGE)."
-    echo "When done, press ENTER on a new line, then press CTRL+D."
-    echo ""
-    echo "--- START PASTE ---"
-    COMPOSE_CONTENTS=$(cat)
-    echo "--- END PASTE ---"
-    [ -z "$COMPOSE_CONTENTS" ] && error "docker-compose.yml cannot be empty."
-    printf '%s\n' "$COMPOSE_CONTENTS" > "$APP_DIR/docker-compose.yml"
-    chmod 600 "$APP_DIR/docker-compose.yml"
-
     # Pull the image now
     echo "Pulling image from registry..."
     docker pull "$REGISTRY_IMAGE" || error "Failed to pull image. Check the image name and credentials."
@@ -265,17 +253,20 @@ REGISTRY_HOST=${REGISTRY_HOST:-}
 REGISTRY_USER=${REGISTRY_USER:-}
 REGEOF
     chmod 600 "$APP_DIR/.registry-info"
+    NEEDS_COMPOSE_GEN=true
     cd "$APP_DIR"
     ;;
 esac
 
-# --- Verify compose file exists ---
-if [ ! -f "$APP_DIR/docker-compose.yml" ] && [ ! -f "$APP_DIR/docker-compose.yaml" ]; then
-  error "No docker-compose.yml found in $APP_DIR."
+# --- Verify compose file exists (skip for registry — generated after port question) ---
+if [ "${NEEDS_COMPOSE_GEN:-false}" != true ]; then
+  if [ ! -f "$APP_DIR/docker-compose.yml" ] && [ ! -f "$APP_DIR/docker-compose.yaml" ]; then
+    error "No docker-compose.yml found in $APP_DIR."
+  fi
+  log "docker-compose.yml found."
 fi
 
 DEPLOY_MODE="compose"
-log "docker-compose.yml found."
 
 # =============================================================================
 # STEP 3: APP PORT
@@ -293,6 +284,24 @@ while true; do
 done
 
 log "App port set to $APP_PORT."
+
+# --- Auto-generate compose for registry images ---
+if [ "${NEEDS_COMPOSE_GEN:-false}" = true ]; then
+  PORT_BIND="127.0.0.1:$APP_PORT:$APP_PORT"
+  [ "$LOCAL_MODE" = true ] && PORT_BIND="0.0.0.0:$APP_PORT:$APP_PORT"
+  cat > "$APP_DIR/docker-compose.yml" << EOF
+services:
+  $APP_NAME:
+    image: $REGISTRY_IMAGE
+    ports:
+      - "$PORT_BIND"
+    restart: unless-stopped
+    env_file:
+      - .env
+EOF
+  chmod 600 "$APP_DIR/docker-compose.yml"
+  log "docker-compose.yml auto-generated for $REGISTRY_IMAGE"
+fi
 
 # =============================================================================
 # STEP 4: ENVIRONMENT VARIABLES
@@ -386,25 +395,18 @@ if [ ! -f "$ENV_FILE" ]; then
   read -p "Does your app need environment variables? (y/n): " NEEDS_ENV
   if [ "$NEEDS_ENV" = "y" ]; then
     echo ""
-    echo "Enter environment variables one at a time (KEY=VALUE)."
-    echo "Press ENTER on an empty line when done."
+    echo "Paste all your environment variables below (KEY=VALUE format, one per line)."
+    echo "When done, press ENTER on a new line, then press CTRL+D."
     echo ""
-    > "$ENV_FILE"
-    while true; do
-      read -p "  Variable (or ENTER to finish): " ENV_LINE
-      [ -z "$ENV_LINE" ] && break
-      if [[ "$ENV_LINE" == *"="* ]]; then
-        echo "$ENV_LINE" >> "$ENV_FILE"
-      else
-        warn "Format must be KEY=VALUE. Try again."
-      fi
-    done
+    echo "--- START PASTE ---"
+    ENV_CONTENTS=$(cat)
+    echo "--- END PASTE ---"
 
-    if [ -s "$ENV_FILE" ]; then
+    if [ -n "$ENV_CONTENTS" ]; then
+      printf '%s\n' "$ENV_CONTENTS" > "$ENV_FILE"
       chmod 600 "$ENV_FILE"
       log "Environment variables saved."
     else
-      rm -f "$ENV_FILE"
       log "No environment variables configured."
     fi
   else
