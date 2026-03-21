@@ -635,7 +635,7 @@ server {
 
     include snippets/security-headers.conf;
 
-    client_max_body_size 20M;
+    client_max_body_size 50M;
 
     # Static assets — no rate limit, cached
     location ~* \.(js|mjs|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|otf|webp|avif|map|webmanifest|pdf|mp4|webm|ogg|mp3|wav|zip)\$ {
