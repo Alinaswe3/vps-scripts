@@ -336,6 +336,7 @@ echo "  View logs   : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILENAME log
 echo "  Status      : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILENAME ps"
 echo "  Stop        : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILENAME down"
 echo "  Restart     : cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILENAME restart"
+echo "  Nginx setup : sudo vps-nginx-config"
 echo "  Update      : sudo bash 05-update-app.sh"
 echo ""
 echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"

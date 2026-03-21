@@ -83,7 +83,8 @@ echo "    vps-close-port  — Close a firewall port"
 echo "    vps-add-user    — Add a system user"
 echo "    vps-list-apps   — List deployed apps"
 echo "    vps-logs        — View app logs"
-echo "    vps-restart     — Restart an app"
+echo "    vps-restart      — Restart an app"
+echo "    vps-nginx-config — Set up nginx for an app"
 echo "    vps-remove-app  — Remove a deployed app"
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -438,6 +439,313 @@ CMDEOF
 fi
 
 # =============================================================================
+# VPS-NGINX-CONFIG
+# =============================================================================
+section "Installing: vps-nginx-config"
+
+if install_cmd "vps-nginx-config"; then
+  cat > /usr/local/bin/vps-nginx-config << 'CMDEOF'
+#!/bin/bash
+# vps-nginx-config — Create or reset nginx reverse proxy for a deployed app
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}[ERROR]${NC} Must run as root. Use: sudo vps-nginx-config"
+  exit 1
+fi
+
+if ! command -v nginx &>/dev/null; then
+  echo -e "${RED}[ERROR]${NC} Nginx is not installed. Run 03-nginx-setup.sh first."
+  exit 1
+fi
+
+DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
+APPS_DIR="/home/$DEPLOY_USER/apps"
+
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}  NGINX CONFIG FOR APP${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+# --- List deployed apps ---
+if [ ! -d "$APPS_DIR" ] || [ -z "$(ls -A "$APPS_DIR" 2>/dev/null)" ]; then
+  echo "No apps deployed. Deploy one first with: sudo bash 04-deploy-app.sh"
+  exit 0
+fi
+
+echo "Deployed apps:"
+echo ""
+APP_LIST=()
+INDEX=1
+for app_dir in "$APPS_DIR"/*/; do
+  [ ! -d "$app_dir" ] && continue
+  APP=$(basename "$app_dir")
+  APP_LIST+=("$APP")
+
+  STATUS="stopped"
+  if cd "$app_dir" && docker compose ps 2>/dev/null | grep -q "Up\|running"; then
+    STATUS="running"
+  fi
+
+  HAS_NGINX="no nginx"
+  [ -f "/etc/nginx/sites-available/$APP" ] && HAS_NGINX="nginx configured"
+
+  echo "  $INDEX) $APP [$STATUS] [$HAS_NGINX]"
+  ((INDEX++))
+done
+
+echo ""
+read -p "Select app [1-${#APP_LIST[@]}]: " APP_INDEX
+
+if ! [[ "$APP_INDEX" =~ ^[0-9]+$ ]] || [ "$APP_INDEX" -lt 1 ] || [ "$APP_INDEX" -gt ${#APP_LIST[@]} ]; then
+  echo "Invalid selection."
+  exit 1
+fi
+
+APP_NAME="${APP_LIST[$((APP_INDEX-1))]}"
+APP_DIR="$APPS_DIR/$APP_NAME"
+
+# --- Check for existing nginx config ---
+if [ -f "/etc/nginx/sites-available/$APP_NAME" ]; then
+  echo ""
+  echo -e "${YELLOW}[!!]${NC} Nginx config already exists for '$APP_NAME':"
+  echo ""
+  cat "/etc/nginx/sites-available/$APP_NAME" | sed 's/^/    /'
+  echo ""
+  read -p "Reset this config? (y/n): " RESET_CONF
+  if [ "$RESET_CONF" != "y" ]; then
+    echo "Keeping existing config."
+    exit 0
+  fi
+fi
+
+# --- Detect local mode from .deploy-info ---
+LOCAL_MODE="false"
+if [ -f "$APP_DIR/.deploy-info" ]; then
+  LOCAL_MODE=$(grep "^LOCAL_MODE=" "$APP_DIR/.deploy-info" 2>/dev/null | cut -d'"' -f2)
+  LOCAL_MODE="${LOCAL_MODE:-false}"
+fi
+
+# --- Auto-detect app port from compose file ---
+COMPOSE_FILE=""
+for f in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+  [ -f "$APP_DIR/$f" ] && COMPOSE_FILE="$APP_DIR/$f" && break
+done
+
+# Also check COMPOSE_DIR from deploy-info
+if [ -z "$COMPOSE_FILE" ] && [ -f "$APP_DIR/.deploy-info" ]; then
+  COMP_DIR=$(grep "^COMPOSE_DIR=" "$APP_DIR/.deploy-info" 2>/dev/null | cut -d'"' -f2)
+  COMP_NAME=$(grep "^COMPOSE_FILENAME=" "$APP_DIR/.deploy-info" 2>/dev/null | cut -d'"' -f2)
+  [ -n "$COMP_DIR" ] && [ -n "$COMP_NAME" ] && [ -f "$COMP_DIR/$COMP_NAME" ] && COMPOSE_FILE="$COMP_DIR/$COMP_NAME"
+fi
+
+DETECTED_PORT=""
+if [ -n "$COMPOSE_FILE" ]; then
+  # Try to extract host port from ports mapping (e.g. "127.0.0.1:3000:3000" or "3000:3000")
+  DETECTED_PORT=$(grep -A5 "ports:" "$COMPOSE_FILE" 2>/dev/null \
+    | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+:([0-9]+):[0-9]+' \
+    | head -1 | cut -d: -f2)
+  [ -z "$DETECTED_PORT" ] && DETECTED_PORT=$(grep -A5 "ports:" "$COMPOSE_FILE" 2>/dev/null \
+    | grep -oE '"?([0-9]+):[0-9]+"?' \
+    | head -1 | tr -d '"' | cut -d: -f1)
+fi
+
+echo ""
+if [ -n "$DETECTED_PORT" ]; then
+  read -p "App port (detected: $DETECTED_PORT, press ENTER to use): " APP_PORT
+  APP_PORT="${APP_PORT:-$DETECTED_PORT}"
+else
+  echo "Could not auto-detect the app port."
+  read -p "What port does your app listen on? (e.g. 3000): " APP_PORT
+fi
+
+if ! [[ "$APP_PORT" =~ ^[0-9]+$ ]] || [ "$APP_PORT" -lt 1 ] || [ "$APP_PORT" -gt 65535 ]; then
+  echo "Invalid port."
+  exit 1
+fi
+
+# --- Local mode: skip routing choice, use localhost ---
+if [ "$LOCAL_MODE" = "true" ]; then
+  echo ""
+  echo -e "${YELLOW}[!!]${NC} VirtualBox local mode — using localhost routing."
+  ROUTE_TYPE="local"
+  LISTEN_DIRECTIVE="0.0.0.0:80"
+  SERVER_NAME="localhost"
+else
+  # --- Choose routing type ---
+  echo ""
+  echo "How should this app be accessed?"
+  echo ""
+  echo "  1) Domain    — app1.example.com (recommended for production)"
+  echo "  2) Port      — http://SERVER_IP:PORT (simpler, no domain needed)"
+  echo ""
+
+  while true; do
+    read -p "Select [1-2]: " ROUTE_CHOICE
+    case "$ROUTE_CHOICE" in
+      1) ROUTE_TYPE="domain"; break ;;
+      2) ROUTE_TYPE="port"; break ;;
+      *) echo "Enter 1 or 2." ;;
+    esac
+  done
+
+  if [ "$ROUTE_TYPE" = "domain" ]; then
+    read -p "Domain name (e.g. myapp.example.com): " DOMAIN_NAME
+    [ -z "$DOMAIN_NAME" ] && echo "Domain cannot be empty." && exit 1
+    LISTEN_DIRECTIVE="80"
+    SERVER_NAME="$DOMAIN_NAME"
+
+  else
+    SERVER_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "unknown")
+    echo ""
+    echo "Choose a public port for nginx to listen on."
+    echo "  This is the port users visit in their browser (e.g. 8080)."
+    echo "  It must be different from ports used by other apps."
+    echo ""
+    read -p "Public port: " PUBLIC_PORT
+    if ! [[ "$PUBLIC_PORT" =~ ^[0-9]+$ ]] || [ "$PUBLIC_PORT" -lt 1 ] || [ "$PUBLIC_PORT" -gt 65535 ]; then
+      echo "Invalid port."
+      exit 1
+    fi
+    LISTEN_DIRECTIVE="$PUBLIC_PORT"
+    SERVER_NAME="_"
+  fi
+fi
+
+# --- Generate nginx config ---
+echo ""
+echo "Writing nginx config..."
+
+NGINX_ZONE=$(echo "${APP_NAME}" | tr -cs 'a-z0-9' '_' | sed 's/_$//')
+
+cat > "/etc/nginx/sites-available/$APP_NAME" << NGINXEOF
+# Nginx config for $APP_NAME — generated by vps-nginx-config
+
+limit_req_zone \$binary_remote_addr zone=${NGINX_ZONE}_rl:10m rate=30r/m;
+
+server {
+    listen $LISTEN_DIRECTIVE;
+    server_name $SERVER_NAME;
+
+    include snippets/security-headers.conf;
+
+    client_max_body_size 20M;
+
+    limit_req zone=${NGINX_ZONE}_rl burst=20 nodelay;
+
+    location / {
+        proxy_pass http://127.0.0.1:$APP_PORT;
+        include snippets/proxy-params.conf;
+    }
+
+    # Block sensitive files
+    location ~ /\. {
+        deny all;
+        return 404;
+    }
+
+    location ~* \.(env|log|sh|sql|bak|git)\$ {
+        deny all;
+        return 404;
+    }
+}
+NGINXEOF
+
+ln -sf "/etc/nginx/sites-available/$APP_NAME" "/etc/nginx/sites-enabled/$APP_NAME"
+
+if nginx -t 2>&1; then
+  systemctl reload nginx
+  echo -e "${GREEN}[OK]${NC} Nginx config created and loaded."
+else
+  echo -e "${RED}[ERROR]${NC} Nginx config test failed. Check the config."
+  cat "/etc/nginx/sites-available/$APP_NAME"
+  exit 1
+fi
+
+# --- Open port in UFW if port-based routing ---
+if [ "$ROUTE_TYPE" = "port" ] && command -v ufw &>/dev/null; then
+  ufw allow "$PUBLIC_PORT/tcp" comment "App: $APP_NAME" > /dev/null 2>&1
+  echo -e "${GREEN}[OK]${NC} Port $PUBLIC_PORT opened in firewall."
+fi
+
+# --- SSL (domain-based only, skip in local mode) ---
+SSL_ACTIVE="false"
+if [ "$ROUTE_TYPE" = "domain" ]; then
+  echo ""
+  read -p "Set up SSL (HTTPS) for $DOMAIN_NAME? (y/n): " SETUP_SSL
+  if [ "$SETUP_SSL" = "y" ]; then
+    SERVER_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo "unknown")
+    echo ""
+    echo -e "${YELLOW}[!!]${NC} Your domain's DNS A record must point to: $SERVER_IP"
+    read -p "Is DNS already pointing to this server? (y/n): " DNS_READY
+
+    if [ "$DNS_READY" = "y" ]; then
+      read -p "Email for SSL certificate notifications: " SSL_EMAIL
+      [ -z "$SSL_EMAIL" ] && echo "Email required." && exit 1
+
+      echo "Running SSL verification (dry run)..."
+      if certbot --nginx -d "$DOMAIN_NAME" --non-interactive --agree-tos --email "$SSL_EMAIL" --dry-run 2>&1; then
+        echo "Installing SSL certificate..."
+        certbot --nginx -d "$DOMAIN_NAME" --non-interactive --agree-tos --email "$SSL_EMAIL" --redirect
+        echo -e "${GREEN}[OK]${NC} SSL installed. HTTPS is active."
+        SSL_ACTIVE="true"
+      else
+        echo -e "${YELLOW}[!!]${NC} SSL verification failed. DNS may not be pointing here yet."
+        echo "  Run later: sudo certbot --nginx -d $DOMAIN_NAME"
+      fi
+    else
+      echo "  When DNS is ready, run: sudo certbot --nginx -d $DOMAIN_NAME"
+    fi
+  fi
+fi
+
+# --- Update .deploy-info with nginx details ---
+if [ -f "$APP_DIR/.deploy-info" ]; then
+  # Remove old nginx entries if present
+  sed -i '/^DOMAIN_NAME=/d; /^NGINX_PORT=/d; /^ROUTE_TYPE=/d; /^SSL_ACTIVE=/d' "$APP_DIR/.deploy-info"
+  # Append new ones
+  {
+    echo "ROUTE_TYPE=\"$ROUTE_TYPE\""
+    echo "SSL_ACTIVE=\"$SSL_ACTIVE\""
+    [ "$ROUTE_TYPE" = "domain" ] && echo "DOMAIN_NAME=\"$DOMAIN_NAME\""
+    [ "$ROUTE_TYPE" = "port" ] && echo "NGINX_PORT=\"$PUBLIC_PORT\""
+  } >> "$APP_DIR/.deploy-info"
+fi
+
+# --- Summary ---
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}  NGINX CONFIGURED FOR '$APP_NAME'${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "  App port     : $APP_PORT"
+
+if [ "$ROUTE_TYPE" = "domain" ]; then
+  if [ "$SSL_ACTIVE" = "true" ]; then
+    echo "  URL          : https://$DOMAIN_NAME"
+  else
+    echo "  URL          : http://$DOMAIN_NAME"
+  fi
+  echo "  SSL          : $SSL_ACTIVE"
+elif [ "$ROUTE_TYPE" = "port" ]; then
+  echo "  URL          : http://${SERVER_IP:-your-server-ip}:$PUBLIC_PORT"
+elif [ "$ROUTE_TYPE" = "local" ]; then
+  echo "  URL          : http://localhost:8080 (via VirtualBox port forwarding)"
+fi
+
+echo ""
+echo "  To reset     : sudo vps-nginx-config"
+echo "  To remove    : sudo rm /etc/nginx/sites-enabled/$APP_NAME && sudo nginx -t && sudo systemctl reload nginx"
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+CMDEOF
+  chmod +x /usr/local/bin/vps-nginx-config
+  log "vps-nginx-config installed."
+fi
+
+# =============================================================================
 # VPS-REMOVE-APP
 # =============================================================================
 section "Installing: vps-remove-app"
@@ -592,6 +900,7 @@ echo "  sudo vps-add-user <name>  Add a system user"
 echo "  vps-list-apps           List deployed apps"
 echo "  vps-logs <app>          View app logs (live)"
 echo "  vps-restart <app>       Restart an app"
+echo "  sudo vps-nginx-config   Set up/reset nginx for an app"
 echo "  sudo vps-remove-app     Remove a deployed app"
 echo ""
 echo "  Try it now: vps-status"

@@ -31,10 +31,13 @@ sudo bash 03-nginx-setup.sh
 # 4. Deploy your app
 sudo bash 04-deploy-app.sh
 
-# 5. Install admin tools (optional but recommended)
+# 5. Install admin tools (recommended)
 sudo bash 06-admin-tools.sh
 
-# 6. Run a security audit (optional)
+# 6. Set up nginx reverse proxy for your app
+sudo vps-nginx-config
+
+# 7. Run a security audit (optional)
 sudo bash 07-security-check.sh
 ```
 
@@ -142,6 +145,17 @@ Deploys any Dockerized app to your server. Supports multiple apps on the same VP
 
 **Your app lives at:** `/home/<deploy-user>/apps/<app-name>/`
 
+#### Setting up Nginx for your app
+
+After deploying, run `sudo vps-nginx-config` to set up nginx reverse proxy. You'll choose between two routing methods:
+
+| Method | Best for | How it works |
+|--------|----------|-------------|
+| **Domain** | Production | Each app gets a domain (e.g. `app1.example.com`). Nginx routes by hostname. All apps share port 80/443. Supports SSL. |
+| **Port** | Testing / no domain | Each app gets a public port (e.g. 8080). Access via `http://SERVER_IP:8080`. No domain or DNS needed. |
+
+**For multiple apps:** just run `sudo vps-nginx-config` once per app. Each app gets its own nginx config. To reset an app's config, run the command again — it detects the existing config and asks if you want to overwrite.
+
 ---
 
 ### 05-update-app.sh — App Updates
@@ -183,6 +197,7 @@ Installs helpful commands to `/usr/local/bin/` so they're available system-wide.
 | `vps-list-apps` | `vps-list-apps` | List all deployed apps with status, domain, port, and commit |
 | `vps-logs` | `vps-logs myapp` | Tail Docker logs for an app (live, last 100 lines) |
 | `vps-restart` | `vps-restart myapp` | Restart an app's containers |
+| `vps-nginx-config` | `sudo vps-nginx-config` | Create or reset nginx reverse proxy for an app (domain or port routing, SSL) |
 | `vps-remove-app` | `sudo vps-remove-app` | Interactively remove a deployed app (stops containers, removes nginx config, deletes files, optionally revokes SSL) |
 
 ---
@@ -289,6 +304,7 @@ After running all scripts and deploying apps, your server looks like this:
   vps-list-apps
   vps-logs
   vps-restart
+  vps-nginx-config
   vps-remove-app
 ```
 
