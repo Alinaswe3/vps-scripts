@@ -208,64 +208,14 @@ section "Step 4/5 — Environment Variables"
 
 ENV_FILE="$COMPOSE_DIR/.env"
 
-if [ -f "$APP_DIR/.env.example" ] || [ -f "$COMPOSE_DIR/.env.example" ]; then
-  EXAMPLE_FILE="${COMPOSE_DIR}/.env.example"
-  [ ! -f "$EXAMPLE_FILE" ] && EXAMPLE_FILE="$APP_DIR/.env.example"
-
-  echo "Found .env.example — walking through each variable."
-  echo "Press ENTER to accept the default value shown in brackets."
-  echo ""
-
-  > "$ENV_FILE"
-  while IFS= read -r line || [ -n "$line" ]; do
-    # Pass comments and blank lines through unchanged
-    if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
-      printf '%s\n' "$line" >> "$ENV_FILE"
-      continue
-    fi
-
-    # Skip lines without =
-    [[ "$line" != *"="* ]] && printf '%s\n' "$line" >> "$ENV_FILE" && continue
-
-    # Extract key
-    KEY="${line%%=*}"
-    KEY="${KEY#"${KEY%%[![:space:]]*}"}"
-    KEY="${KEY%"${KEY##*[![:space:]]}"}"
-    [ -z "$KEY" ] && printf '%s\n' "$line" >> "$ENV_FILE" && continue
-
-    # Extract and clean default value
-    DEFAULT_VAL="${line#*=}"
-    if [[ "$DEFAULT_VAL" =~ ^\"(.*)\"[[:space:]]*(\#.*)?$ ]]; then
-      DISPLAY_VAL="${BASH_REMATCH[1]}"
-    elif [[ "$DEFAULT_VAL" =~ ^\'(.*)\'[[:space:]]*(\#.*)?$ ]]; then
-      DISPLAY_VAL="${BASH_REMATCH[1]}"
-    else
-      DISPLAY_VAL="${DEFAULT_VAL%% #*}"
-      DISPLAY_VAL="${DISPLAY_VAL%"${DISPLAY_VAL##*[![:space:]]}"}"
-    fi
-
-    if [ -n "$DISPLAY_VAL" ]; then
-      read -p "  $KEY [$DISPLAY_VAL]: " USER_VAL < /dev/tty || true
-      USER_VAL="${USER_VAL:-$DISPLAY_VAL}"
-    else
-      read -p "  $KEY: " USER_VAL < /dev/tty || true
-    fi
-
-    printf '%s="%s"\n' "$KEY" "$USER_VAL" >> "$ENV_FILE"
-  done < "$EXAMPLE_FILE"
-
-  chmod 600 "$ENV_FILE"
-  log "Environment variables configured."
-
-elif [ -f "$ENV_FILE" ]; then
+if [ -f "$ENV_FILE" ]; then
   warn ".env already exists in repo — using it as-is."
   warn "Make sure it does not contain real secrets committed to git."
-
 else
-  read -p "No .env.example found. Does this app need a .env file? (y/n): " NEEDS_ENV
+  read -p "Does this app need environment variables? (y/n): " NEEDS_ENV
   if [ "$NEEDS_ENV" = "y" ]; then
     echo ""
-    echo "Paste your .env contents below."
+    echo "Paste your .env contents below (KEY=VALUE format, one per line)."
     echo "Press ENTER on a new line then CTRL+D when done."
     echo ""
     echo "--- START PASTE ---"
@@ -275,6 +225,8 @@ else
       printf '%s\n' "$ENV_CONTENTS" > "$ENV_FILE"
       chmod 600 "$ENV_FILE"
       log ".env saved."
+    else
+      log "No environment variables configured."
     fi
   else
     log "No .env configured."
