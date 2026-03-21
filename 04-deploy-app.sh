@@ -293,18 +293,18 @@ done
 # SAVE DEPLOYMENT METADATA
 # =============================================================================
 cat > "$APP_DIR/.deploy-info" << EOF
-APP_NAME=$APP_NAME
-APP_DIR=$APP_DIR
-COMPOSE_FILE=$COMPOSE_FILE
-COMPOSE_DIR=$COMPOSE_DIR
-COMPOSE_FILENAME=$COMPOSE_FILENAME
-GIT_URL=$GIT_URL
-GIT_BRANCH=$GIT_BRANCH
-IS_PRIVATE=${IS_PRIVATE:-n}
-LOCAL_MODE=$LOCAL_MODE
-DEPLOY_USER=$DEPLOY_USER
-DEPLOYED_AT=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
-DEPLOYED_COMMIT=$(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")
+APP_NAME="$APP_NAME"
+APP_DIR="$APP_DIR"
+COMPOSE_FILE="$COMPOSE_FILE"
+COMPOSE_DIR="$COMPOSE_DIR"
+COMPOSE_FILENAME="$COMPOSE_FILENAME"
+GIT_URL="$GIT_URL"
+GIT_BRANCH="$GIT_BRANCH"
+IS_PRIVATE="${IS_PRIVATE:-n}"
+LOCAL_MODE="$LOCAL_MODE"
+DEPLOY_USER="$DEPLOY_USER"
+DEPLOYED_AT="$(date -u +"%Y-%m-%d %H:%M:%S UTC")"
+DEPLOYED_COMMIT="$(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null || echo "unknown")"
 EOF
 
 chmod 600 "$APP_DIR/.deploy-info"

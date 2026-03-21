@@ -49,7 +49,7 @@ That's it. Your app is live.
 | 01 | `01-vps-harden.sh` | Lock down the server (SSH, firewall, intrusion detection) | None — run first |
 | 02 | `02-docker-install.sh` | Install Docker + Compose | None (recommends 01) |
 | 03 | `03-nginx-setup.sh` | Install Nginx + Certbot with secure defaults | None (run before 04) |
-| 04 | `04-deploy-app.sh` | Deploy an app from a git repo | Requires 02 + 03 |
+| 04 | `04-deploy-app.sh` | Deploy an app from a git repo | Requires 02 |
 | 05 | `05-update-app.sh` | Update a deployed app (code or env vars) | Requires a deployed app |
 | 06 | `06-admin-tools.sh` | Install admin utility commands | Recommends 01 + 02 |
 | 07 | `07-security-check.sh` | Full security audit of the server | None (best after 01-06) |
@@ -111,7 +111,7 @@ Installs Nginx as a reverse proxy with SSL support.
 
 **What it configures:**
 - Nginx with version hidden (`server_tokens off`)
-- Security headers snippet (X-Frame-Options, Content-Type-Options, Referrer-Policy, Permissions-Policy, CSP)
+- Security headers snippet (X-Frame-Options, Content-Type-Options, Referrer-Policy, Permissions-Policy — CSP is left to each app)
 - Proxy parameters snippet (WebSocket support, real IP forwarding, timeouts)
 - Certbot for free SSL certificates
 - Removes the default Nginx site
@@ -124,31 +124,21 @@ These snippets are reused automatically when you deploy apps.
 
 Deploys any Dockerized app to your server. Supports multiple apps on the same VPS.
 
-**Three ways to provide your app:**
-
-| Option | Best for |
-|--------|----------|
-| **1. Git repository** | Apps hosted on GitHub/GitLab. Clones the repo, supports private repos with access tokens. |
-| **2. Paste docker-compose.yml** | Quick deployments. Paste your compose file contents directly — great for Docker Hub images or simple setups. |
-| **3. Local folder** | Apps already on the server. Point to a folder with your docker-compose.yml and/or Dockerfiles, and it copies them into the managed apps directory. |
-
 **You'll be asked for:**
 - App name (e.g. `myapp`)
-- App source (git repo, paste compose, or local folder)
-- Port your app listens on (e.g. 3000, 8000, 8080)
-- Environment variables (reads from `.env.example` if present, or manual entry)
-- Domain name (optional — can use server IP instead)
-- Whether to set up SSL (if you have a domain)
+- Git repository URL (HTTPS, supports private repos with access tokens)
+- Branch to deploy (default: `main`)
+- Which compose/Dockerfile to use (auto-detected from the repo)
+- Environment variables (bulk paste your `.env` contents)
+- Registry login if your compose file references private images (e.g. `ghcr.io`)
 
 **What it does:**
-- Gets your app source (clone, paste, or copy)
-- Detects `docker-compose.yml` or `Dockerfile` automatically
-- Generates a `docker-compose.yml` from Dockerfile if needed
-- Prompts for each `.env.example` variable so you can fill in values
-- Sets up Nginx reverse proxy with rate limiting and security headers
-- Configures SSL via Certbot (with DNS verification dry-run)
+- Clones your git repo
+- Finds all `docker-compose.yml` / `Dockerfile` candidates and lets you pick
+- Lets you paste your entire `.env` file in one go (CTRL+D to finish)
+- Detects private registry images and handles `docker login`
+- Pulls images and starts containers with `docker compose up`
 - Saves deployment metadata for the update script
-- Auto-detects VirtualBox and offers local test mode
 
 **Your app lives at:** `/home/<deploy-user>/apps/<app-name>/`
 
@@ -162,21 +152,21 @@ Updates a deployed app's code, environment variables, or both. Automatically bac
 - Which app to update (shows a list of deployed apps)
 - What to update: code, env vars, or both
 
-**For code updates (depends on how you deployed):**
-- **Git repo** — pulls latest code from your branch
-- **Paste compose** — asks you to paste an updated docker-compose.yml
-- **Local folder** — asks for the folder path to copy updated files from
-- Rebuilds Docker containers after updating
+**For code updates:**
+- Pulls latest code from your git branch
+- Optionally change the Docker image tag (e.g. `latest` → `v2.0`)
+- Rebuilds and restarts containers
 - If the app fails to start → shows logs and offers to roll back
 
 **For env updates:**
 - Shows current variables (sensitive values are masked)
 - Edit individual variables by number
 - Add new variables
+- Or paste a completely new `.env` file
 
 **Backups are saved at:** `/home/<deploy-user>/apps/<app-name>/.backups/<timestamp>/`
 
-Each backup includes: `.env`, `docker-compose.yml`, deployment metadata, git commit hash, and Docker images.
+Each backup includes: `.env`, compose file, deployment metadata, and running image list.
 
 ---
 
@@ -299,6 +289,7 @@ After running all scripts and deploying apps, your server looks like this:
   vps-list-apps
   vps-logs
   vps-restart
+  vps-remove-app
 ```
 
 ---
