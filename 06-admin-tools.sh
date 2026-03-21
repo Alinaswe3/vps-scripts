@@ -618,6 +618,10 @@ fi
 echo ""
 echo "Writing nginx config..."
 
+# Remove old config first to avoid duplicate zone conflicts
+rm -f "/etc/nginx/sites-enabled/$APP_NAME"
+rm -f "/etc/nginx/sites-available/$APP_NAME"
+
 NGINX_ZONE=$(echo "${APP_NAME}" | tr -cs 'a-z0-9' '_' | sed 's/_$//')
 
 cat > "/etc/nginx/sites-available/$APP_NAME" << NGINXEOF
