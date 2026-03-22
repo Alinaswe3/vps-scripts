@@ -431,7 +431,7 @@ fi
 # UPDATE DEPLOY INFO
 # =============================================================================
 if [ "$APP_HEALTHY" = true ]; then
-  sed -i "s/^DEPLOYED_AT=.*/DEPLOYED_AT=$(date -u +"%Y-%m-%d %H:%M:%S UTC")/" "$DEPLOY_INFO" 2>/dev/null || true
+  sed -i "s/^DEPLOYED_AT=.*/DEPLOYED_AT=\"$(date -u +"%Y-%m-%d %H:%M:%S UTC")\"/" "$DEPLOY_INFO" 2>/dev/null || true
   chown -R "$DEPLOY_USER:$DEPLOY_USER" "$APP_DIR"
 fi
 
