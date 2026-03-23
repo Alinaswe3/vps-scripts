@@ -29,6 +29,7 @@
 #   vps-logs          — Tail Docker logs for a deployed app
 #   vps-restart       — Restart a deployed app's containers
 #   vps-remove-app    — Completely remove a deployed app
+#   vps-cleanup       — Free disk space (Docker junk, old backups, logs, caches)
 #
 # =============================================================================
 
@@ -897,6 +898,296 @@ CMDEOF
 fi
 
 # =============================================================================
+# VPS-CLEANUP
+# =============================================================================
+section "Installing: vps-cleanup"
+
+if install_cmd "vps-cleanup"; then
+  cat > /usr/local/bin/vps-cleanup << 'CMDEOF'
+#!/bin/bash
+# vps-cleanup — Free disk space on the VPS
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; CYAN='\033[0;36m'; NC='\033[0m'
+
+if [ "$EUID" -ne 0 ]; then
+  echo -e "${RED}[ERROR]${NC} Must run as root. Use: sudo vps-cleanup"
+  exit 1
+fi
+
+DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
+APPS_DIR="/home/${DEPLOY_USER}/apps"
+TOTAL_FREED=0
+
+bytes_to_human() {
+  local bytes=$1
+  if [ "$bytes" -ge 1073741824 ]; then
+    echo "$(awk "BEGIN {printf \"%.1f\", $bytes/1073741824}") GB"
+  elif [ "$bytes" -ge 1048576 ]; then
+    echo "$(awk "BEGIN {printf \"%.1f\", $bytes/1048576}") MB"
+  elif [ "$bytes" -ge 1024 ]; then
+    echo "$(awk "BEGIN {printf \"%.1f\", $bytes/1024}") KB"
+  else
+    echo "${bytes} B"
+  fi
+}
+
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}  VPS STORAGE CLEANUP${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+
+# --- Storage Overview ---
+echo ""
+echo -e "${CYAN}  DISK USAGE OVERVIEW${NC}"
+echo -e "${CYAN}  ───────────────────────────────────────────────${NC}"
+df -h / | awk 'NR==2 {printf "  Disk: %s used of %s (%s) — %s free\n", $3, $2, $5, $4}'
+echo ""
+
+# Docker disk usage summary
+if command -v docker &>/dev/null; then
+  echo -e "${CYAN}  DOCKER DISK USAGE${NC}"
+  echo -e "${CYAN}  ───────────────────────────────────────────────${NC}"
+  docker system df 2>/dev/null | while IFS= read -r line; do
+    echo "  $line"
+  done
+  echo ""
+fi
+
+# Apps directory size
+if [ -d "$APPS_DIR" ]; then
+  echo -e "${CYAN}  APPS DIRECTORY${NC}"
+  echo -e "${CYAN}  ───────────────────────────────────────────────${NC}"
+  du -sh "$APPS_DIR" 2>/dev/null | awk '{printf "  Total: %s  (%s)\n", $1, $2}'
+  for app_dir in "$APPS_DIR"/*/; do
+    [ ! -d "$app_dir" ] && continue
+    app_name=$(basename "$app_dir")
+    app_size=$(du -sh "$app_dir" 2>/dev/null | awk '{print $1}')
+    echo "    $app_name: $app_size"
+  done
+  echo ""
+fi
+
+echo -e "${YELLOW}  The following cleanup steps will be offered.${NC}"
+echo -e "${YELLOW}  Running containers and volumes are NEVER touched.${NC}"
+echo ""
+
+# =========================================================================
+# STEP 1: Docker build cache
+# =========================================================================
+if command -v docker &>/dev/null; then
+  CACHE_SIZE=$(docker system df 2>/dev/null | awk '/Build Cache/ {print $4}')
+  echo -e "${BLUE}[1/7] Docker build cache${NC} (current: ${CACHE_SIZE:-unknown})"
+  read -p "  Clean Docker build cache? (y/n): " CLEAN_CACHE
+  if [ "$CLEAN_CACHE" = "y" ]; then
+    BEFORE=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+    docker builder prune -f 2>/dev/null || true
+    AFTER=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+    FREED=$((AFTER - BEFORE))
+    [ "$FREED" -lt 0 ] && FREED=0
+    TOTAL_FREED=$((TOTAL_FREED + FREED))
+    echo -e "  ${GREEN}[OK]${NC} Build cache cleaned. Freed $(bytes_to_human $FREED)"
+  else
+    echo "  Skipped."
+  fi
+  echo ""
+
+  # =========================================================================
+  # STEP 2: Dangling and unused images (not used by running containers)
+  # =========================================================================
+  DANGLING_COUNT=$(docker images -f "dangling=true" -q 2>/dev/null | wc -l)
+  # Unused = images not referenced by any container (running or stopped)
+  UNUSED_COUNT=$(docker images --format '{{.ID}}' 2>/dev/null | while read img; do
+    docker ps -a --filter "ancestor=$img" -q 2>/dev/null | grep -q . || echo "$img"
+  done | wc -l)
+
+  echo -e "${BLUE}[2/7] Unused Docker images${NC} (dangling: $DANGLING_COUNT, unused: $UNUSED_COUNT)"
+  if [ "$DANGLING_COUNT" -gt 0 ] || [ "$UNUSED_COUNT" -gt 0 ]; then
+    read -p "  Remove dangling images? (y/n): " CLEAN_DANGLING
+    if [ "$CLEAN_DANGLING" = "y" ]; then
+      BEFORE=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+      docker image prune -f 2>/dev/null || true
+      AFTER=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+      FREED=$((AFTER - BEFORE))
+      [ "$FREED" -lt 0 ] && FREED=0
+      TOTAL_FREED=$((TOTAL_FREED + FREED))
+      echo -e "  ${GREEN}[OK]${NC} Dangling images removed. Freed $(bytes_to_human $FREED)"
+    else
+      echo "  Skipped."
+    fi
+
+    if [ "$UNUSED_COUNT" -gt 0 ]; then
+      echo ""
+      echo -e "  ${YELLOW}[!!]${NC} There are also $UNUSED_COUNT images not used by any container."
+      echo "  These may include old versions of your app images."
+      read -p "  Remove ALL unused images (keeps images used by running containers)? (y/n): " CLEAN_UNUSED
+      if [ "$CLEAN_UNUSED" = "y" ]; then
+        BEFORE=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+        docker image prune -a -f --filter "until=24h" 2>/dev/null || true
+        AFTER=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+        FREED=$((AFTER - BEFORE))
+        [ "$FREED" -lt 0 ] && FREED=0
+        TOTAL_FREED=$((TOTAL_FREED + FREED))
+        echo -e "  ${GREEN}[OK]${NC} Unused images removed. Freed $(bytes_to_human $FREED)"
+      else
+        echo "  Skipped."
+      fi
+    fi
+  else
+    echo "  Nothing to clean."
+  fi
+  echo ""
+
+  # =========================================================================
+  # STEP 3: Stopped containers
+  # =========================================================================
+  STOPPED_COUNT=$(docker ps -a --filter "status=exited" --filter "status=dead" --filter "status=created" -q 2>/dev/null | wc -l)
+  echo -e "${BLUE}[3/7] Stopped containers${NC} (found: $STOPPED_COUNT)"
+  if [ "$STOPPED_COUNT" -gt 0 ]; then
+    echo "  Stopped containers:"
+    docker ps -a --filter "status=exited" --filter "status=dead" --filter "status=created" --format "    {{.Names}} ({{.Image}}) — stopped {{.Status}}" 2>/dev/null
+    read -p "  Remove all stopped containers? (y/n): " CLEAN_STOPPED
+    if [ "$CLEAN_STOPPED" = "y" ]; then
+      BEFORE=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+      docker container prune -f 2>/dev/null || true
+      AFTER=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+      FREED=$((AFTER - BEFORE))
+      [ "$FREED" -lt 0 ] && FREED=0
+      TOTAL_FREED=$((TOTAL_FREED + FREED))
+      echo -e "  ${GREEN}[OK]${NC} Stopped containers removed. Freed $(bytes_to_human $FREED)"
+    else
+      echo "  Skipped."
+    fi
+  else
+    echo "  Nothing to clean."
+  fi
+  echo ""
+
+  # =========================================================================
+  # STEP 4: Unused Docker networks
+  # =========================================================================
+  UNUSED_NETS=$(docker network ls --filter "type=custom" -q 2>/dev/null | while read net; do
+    CONNECTED=$(docker network inspect "$net" --format '{{len .Containers}}' 2>/dev/null)
+    [ "$CONNECTED" = "0" ] && echo "$net"
+  done | wc -l)
+  echo -e "${BLUE}[4/7] Unused Docker networks${NC} (found: $UNUSED_NETS)"
+  if [ "$UNUSED_NETS" -gt 0 ]; then
+    read -p "  Remove unused networks? (y/n): " CLEAN_NETS
+    if [ "$CLEAN_NETS" = "y" ]; then
+      docker network prune -f 2>/dev/null || true
+      echo -e "  ${GREEN}[OK]${NC} Unused networks removed."
+    else
+      echo "  Skipped."
+    fi
+  else
+    echo "  Nothing to clean."
+  fi
+  echo ""
+fi
+
+# =========================================================================
+# STEP 5: Old app backups (keep last 5 per app)
+# =========================================================================
+echo -e "${BLUE}[5/7] Old app backups${NC} (keeping last 5 per app)"
+BACKUP_FOUND=false
+if [ -d "$APPS_DIR" ]; then
+  for app_dir in "$APPS_DIR"/*/; do
+    [ ! -d "$app_dir" ] && continue
+    BACKUP_DIR="${app_dir}backups"
+    [ ! -d "$BACKUP_DIR" ] && continue
+
+    app_name=$(basename "$app_dir")
+    # Count backup directories (sorted oldest first)
+    BACKUP_LIST=($(ls -dt "$BACKUP_DIR"/*/ 2>/dev/null))
+    BACKUP_COUNT=${#BACKUP_LIST[@]}
+
+    if [ "$BACKUP_COUNT" -gt 5 ]; then
+      BACKUP_FOUND=true
+      OLD_COUNT=$((BACKUP_COUNT - 5))
+      OLD_SIZE=$(du -shc "${BACKUP_LIST[@]:5}" 2>/dev/null | tail -1 | awk '{print $1}')
+      echo "  $app_name: $BACKUP_COUNT backups found, $OLD_COUNT older than last 5 ($OLD_SIZE)"
+      read -p "  Delete $OLD_COUNT old backups for '$app_name'? (y/n): " CLEAN_BACKUPS
+      if [ "$CLEAN_BACKUPS" = "y" ]; then
+        BEFORE=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+        for old_backup in "${BACKUP_LIST[@]:5}"; do
+          rm -rf "$old_backup"
+        done
+        AFTER=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+        FREED=$((AFTER - BEFORE))
+        [ "$FREED" -lt 0 ] && FREED=0
+        TOTAL_FREED=$((TOTAL_FREED + FREED))
+        echo -e "  ${GREEN}[OK]${NC} Removed $OLD_COUNT old backups. Freed $(bytes_to_human $FREED)"
+      else
+        echo "  Skipped."
+      fi
+    fi
+  done
+fi
+if [ "$BACKUP_FOUND" = false ]; then
+  echo "  Nothing to clean (all apps have 5 or fewer backups)."
+fi
+echo ""
+
+# =========================================================================
+# STEP 6: System journal logs (older than 7 days)
+# =========================================================================
+if command -v journalctl &>/dev/null; then
+  JOURNAL_SIZE=$(journalctl --disk-usage 2>/dev/null | grep -oP '[\d.]+\s*[KMGT]' || echo "unknown")
+  echo -e "${BLUE}[6/7] System journal logs${NC} (current: ${JOURNAL_SIZE:-unknown})"
+  read -p "  Trim journal logs older than 7 days? (y/n): " CLEAN_JOURNAL
+  if [ "$CLEAN_JOURNAL" = "y" ]; then
+    BEFORE=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+    journalctl --vacuum-time=7d > /dev/null 2>&1 || true
+    AFTER=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+    FREED=$((AFTER - BEFORE))
+    [ "$FREED" -lt 0 ] && FREED=0
+    TOTAL_FREED=$((TOTAL_FREED + FREED))
+    echo -e "  ${GREEN}[OK]${NC} Journal trimmed. Freed $(bytes_to_human $FREED)"
+  else
+    echo "  Skipped."
+  fi
+  echo ""
+fi
+
+# =========================================================================
+# STEP 7: APT package cache and old kernels
+# =========================================================================
+if command -v apt &>/dev/null; then
+  APT_CACHE_SIZE=$(du -sh /var/cache/apt/archives/ 2>/dev/null | awk '{print $1}')
+  echo -e "${BLUE}[7/7] APT cache & old packages${NC} (cache: ${APT_CACHE_SIZE:-unknown})"
+  read -p "  Clean APT cache and remove old packages? (y/n): " CLEAN_APT
+  if [ "$CLEAN_APT" = "y" ]; then
+    BEFORE=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+    apt-get clean -y > /dev/null 2>&1 || true
+    apt-get autoremove -y > /dev/null 2>&1 || true
+    AFTER=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
+    FREED=$((AFTER - BEFORE))
+    [ "$FREED" -lt 0 ] && FREED=0
+    TOTAL_FREED=$((TOTAL_FREED + FREED))
+    echo -e "  ${GREEN}[OK]${NC} APT cache cleaned. Freed $(bytes_to_human $FREED)"
+  else
+    echo "  Skipped."
+  fi
+  echo ""
+fi
+
+# =========================================================================
+# SUMMARY
+# =========================================================================
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${GREEN}  CLEANUP COMPLETE${NC}"
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+echo "  Total freed: $(bytes_to_human $TOTAL_FREED)"
+echo ""
+df -h / | awk 'NR==2 {printf "  Disk now: %s used of %s (%s) — %s free\n", $3, $2, $5, $4}'
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+CMDEOF
+  chmod +x /usr/local/bin/vps-cleanup
+  log "vps-cleanup installed."
+fi
+
+# =============================================================================
 # DONE
 # =============================================================================
 echo ""
@@ -915,6 +1206,7 @@ echo "  vps-logs <app>          View app logs (live)"
 echo "  vps-restart <app>       Restart an app"
 echo "  sudo vps-nginx-config   Set up/reset nginx for an app"
 echo "  sudo vps-remove-app     Remove a deployed app"
+echo "  sudo vps-cleanup        Free disk space"
 echo ""
 echo "  Try it now: vps-status"
 echo ""
