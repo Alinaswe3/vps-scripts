@@ -309,7 +309,35 @@ if grep -qE '^\s+build:' "$COMPOSE_FILENAME" 2>/dev/null; then
   echo "  2) Pull from registry    (docker compose pull + up)"
   echo ""
   read -p "Build or pull? [1/2]: " BUILD_CHOICE
-  [ "$BUILD_CHOICE" = "1" ] && NEEDS_BUILD=true
+  if [ "$BUILD_CHOICE" != "1" ]; then
+    # User wants to pull — need an image URL in the compose file
+    echo ""
+    echo "  Provide the full image URL from your registry."
+    echo "  Examples:"
+    echo "    ghcr.io/username/myapp:latest"
+    echo "    docker.io/username/myapp:v1.0"
+    echo "    registry.example.com/myapp:latest"
+    echo ""
+    read -p "  Image URL: " REGISTRY_IMAGE
+
+    if [ -z "$REGISTRY_IMAGE" ]; then
+      warn "No image provided. Falling back to building on server."
+      NEEDS_BUILD=true
+    else
+      # Replace build: directive with image: in the compose file
+      # Works regardless of service name — finds the build: line and swaps it
+      # Handles both simple (build: .) and multi-line (build:\n  context:\n  dockerfile:)
+      # 1. Replace "build: <value>" (simple form) with image:
+      sed -i "s|^\(\s*\)build:\s*\S.*|\\1image: ${REGISTRY_IMAGE}|" "$COMPOSE_FILENAME"
+      # 2. Replace "build:" (multi-line form) with image: and remove its children
+      sed -i "/^\s*build:\s*$/{ s|^\(\s*\)build:.*|\\1image: ${REGISTRY_IMAGE}|; }" "$COMPOSE_FILENAME"
+      # 3. Remove orphaned build sub-keys (context:, dockerfile:, args:, target:)
+      sed -i '/^\s*context:\s*/d; /^\s*dockerfile:\s*/d; /^\s*args:\s*/d; /^\s*target:\s*/d' "$COMPOSE_FILENAME"
+      log "Compose file updated with image: $REGISTRY_IMAGE"
+    fi
+  else
+    NEEDS_BUILD=true
+  fi
 fi
 
 if [ "$NEEDS_BUILD" = true ]; then
