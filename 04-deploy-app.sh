@@ -197,6 +197,36 @@ else
   done
 fi
 
+# If a Dockerfile was selected, generate a docker-compose.yml for it
+if [[ "$(basename "$COMPOSE_FILE")" == "Dockerfile"* ]]; then
+  DOCKERFILE_DIR=$(dirname "$COMPOSE_FILE")
+  DOCKERFILE_NAME=$(basename "$COMPOSE_FILE")
+
+  echo ""
+  read -p "Which port does this app listen on inside the container? (e.g. 3000, 8080): " CONTAINER_PORT
+  if ! [[ "$CONTAINER_PORT" =~ ^[0-9]+$ ]]; then
+    error "Invalid port number."
+  fi
+
+  read -p "Host port to map to (press ENTER for $CONTAINER_PORT): " HOST_PORT
+  HOST_PORT="${HOST_PORT:-$CONTAINER_PORT}"
+
+  cat > "$DOCKERFILE_DIR/docker-compose.yml" << DEOF
+# Auto-generated from $DOCKERFILE_NAME by 04-deploy-app.sh
+services:
+  $APP_NAME:
+    build:
+      context: .
+      dockerfile: $DOCKERFILE_NAME
+    ports:
+      - "127.0.0.1:${HOST_PORT}:${CONTAINER_PORT}"
+    restart: unless-stopped
+DEOF
+
+  COMPOSE_FILE="$DOCKERFILE_DIR/docker-compose.yml"
+  log "Generated docker-compose.yml from $DOCKERFILE_NAME (port ${HOST_PORT}:${CONTAINER_PORT})"
+fi
+
 # Normalise — always reference as docker-compose.yml in APP_DIR
 COMPOSE_FILENAME=$(basename "$COMPOSE_FILE")
 COMPOSE_DIR=$(dirname "$COMPOSE_FILE")
@@ -264,15 +294,33 @@ if [ -n "$PRIVATE_IMAGES" ]; then
   fi
 fi
 
-# Pull images and start
+# Build/pull images and start
 echo ""
-echo "Pulling images and starting containers..."
 cd "$COMPOSE_DIR"
 
-docker compose -f "$COMPOSE_FILENAME" pull 2>&1 \
-  || warn "Some images could not be pulled — check registry credentials."
+# Check if compose file has build directives and ask user
+NEEDS_BUILD=false
+if grep -qE '^\s+build:' "$COMPOSE_FILENAME" 2>/dev/null; then
+  echo -e "${YELLOW}[!!]${NC} This compose file contains 'build:' directives."
+  echo "  Building images on the VPS uses significant CPU and RAM."
+  echo "  If you pre-built and pushed images to a registry, choose 'pull'."
+  echo ""
+  echo "  1) Build on this server  (docker compose up --build)"
+  echo "  2) Pull from registry    (docker compose pull + up)"
+  echo ""
+  read -p "Build or pull? [1/2]: " BUILD_CHOICE
+  [ "$BUILD_CHOICE" = "1" ] && NEEDS_BUILD=true
+fi
 
-docker compose -f "$COMPOSE_FILENAME" up -d --remove-orphans 2>&1
+if [ "$NEEDS_BUILD" = true ]; then
+  echo "Building images and starting containers..."
+  docker compose -f "$COMPOSE_FILENAME" up -d --build --remove-orphans 2>&1
+else
+  echo "Pulling images and starting containers..."
+  docker compose -f "$COMPOSE_FILENAME" pull 2>&1 \
+    || warn "Some images could not be pulled — check registry credentials."
+  docker compose -f "$COMPOSE_FILENAME" up -d --remove-orphans 2>&1
+fi
 
 # Health check
 echo ""

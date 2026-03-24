@@ -28,6 +28,7 @@
 #   vps-list-apps     — List all deployed apps with status
 #   vps-logs          — Tail Docker logs for a deployed app
 #   vps-restart       — Restart a deployed app's containers
+#   vps-cleanup       — Free disk space (Docker cache, unused images, old backups, logs, APT)
 #   vps-remove-app    — Completely remove a deployed app
 #   vps-cleanup       — Free disk space (Docker junk, old backups, logs, caches)
 #
@@ -1092,7 +1093,7 @@ BACKUP_FOUND=false
 if [ -d "$APPS_DIR" ]; then
   for app_dir in "$APPS_DIR"/*/; do
     [ ! -d "$app_dir" ] && continue
-    BACKUP_DIR="${app_dir}backups"
+    BACKUP_DIR="${app_dir}.backups"
     [ ! -d "$BACKUP_DIR" ] && continue
 
     app_name=$(basename "$app_dir")

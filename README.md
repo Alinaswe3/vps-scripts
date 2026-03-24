@@ -199,6 +199,7 @@ Installs helpful commands to `/usr/local/bin/` so they're available system-wide.
 | `vps-restart` | `vps-restart myapp` | Restart an app's containers |
 | `vps-nginx-config` | `sudo vps-nginx-config` | Create or reset nginx reverse proxy for an app (domain or port routing, SSL) |
 | `vps-remove-app` | `sudo vps-remove-app` | Interactively remove a deployed app (stops containers, removes nginx config, deletes files, optionally revokes SSL) |
+| `vps-cleanup` | `sudo vps-cleanup` | Free disk space (Docker cache, unused images, old backups, journal logs, APT cache) |
 
 ---
 
@@ -306,6 +307,7 @@ After running all scripts and deploying apps, your server looks like this:
   vps-restart
   vps-nginx-config
   vps-remove-app
+  vps-cleanup
 ```
 
 ---
@@ -358,6 +360,20 @@ cp .backups/20260316-143000/.env .env
 docker compose down && docker compose up -d --build
 ```
 
+### My server is running out of disk space
+
+Run `sudo vps-cleanup` for a guided cleanup. It shows a full storage overview and walks you through 7 cleanup steps:
+
+1. Docker build cache
+2. Dangling and unused images (never touches images used by running containers)
+3. Stopped containers
+4. Unused Docker networks
+5. Old app backups (keeps last 5 per app)
+6. System journal logs older than 7 days
+7. APT package cache
+
+Every step asks for confirmation — nothing is deleted automatically. Volumes, `.env` files, compose files, and running containers are never touched.
+
 ### How do I deploy a second app?
 
 Just run `sudo bash 04-deploy-app.sh` again. Each app gets its own directory, Nginx config, and SSL certificate.
@@ -365,6 +381,33 @@ Just run `sudo bash 04-deploy-app.sh` again. Each app gets its own directory, Ng
 ### How do I check server security?
 
 Run `sudo bash 07-security-check.sh` for a full audit, or use `vps-status` for a quick health check.
+
+---
+
+## Tips
+
+### Add Swap Space
+
+Budget VPS plans (1-2GB RAM) often run out of memory during Docker image builds or when running multiple apps. The server either kills a container or the build fails silently. Adding swap gives the OS overflow space on disk so it doesn't run out of memory — it's slower than RAM but prevents crashes.
+
+```bash
+# Add 1GB swap (adjust size as needed: 1G, 2G, 4G)
+sudo fallocate -l 1G /swap.img
+sudo chmod 600 /swap.img
+sudo mkswap /swap.img
+sudo swapon /swap.img
+
+# Make permanent across reboots
+echo '/swap.img none swap sw 0 0' | sudo tee -a /etc/fstab
+
+# Reduce swap aggressiveness — only use swap when RAM is 90%+ full
+echo 'vm.swappiness=10' | sudo tee -a /etc/sysctl.conf
+sudo sysctl vm.swappiness=10
+```
+
+**How much swap?** A good rule of thumb: match your RAM (1GB RAM → 1GB swap, 2GB RAM → 2GB swap). Servers with 4GB+ RAM rarely need more than 2GB swap.
+
+Verify it's active with `free -h` — you should see your swap size in the output.
 
 ---
 

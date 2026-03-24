@@ -163,21 +163,21 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 proxy_cache_bypass $http_upgrade;
 
-# Timeouts
+# Timeouts — generous for file uploads and slow upstream responses
 proxy_read_timeout 120s;
 proxy_connect_timeout 60s;
 proxy_send_timeout 120s;
 
-# Buffer settings — prevents nginx from mangling large request bodies
-# (file uploads, multipart forms) by buffering them properly in memory
+# Response buffer settings — prevents nginx from mangling upstream responses
 proxy_buffering on;
 proxy_buffer_size 16k;
 proxy_buffers 8 32k;
 proxy_busy_buffers_size 64k;
 
-# Request body — buffer in memory up to 1MB, spill to disk after that
-client_body_buffer_size 1m;
-client_body_temp_path /tmp/nginx_client_body 1 2;
+# Request body buffer — keeps uploads in memory instead of writing to temp
+# files, which can mangle multipart form data. Anything above this size
+# spills to disk gracefully via nginx's temp file handling.
+client_body_buffer_size 2m;
 EOF
 
   log "Proxy params snippet created at $PROXY_SNIPPET"
