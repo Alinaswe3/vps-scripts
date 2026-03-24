@@ -639,6 +639,13 @@ server {
 
     client_max_body_size 50M;
 
+    # Header buffer — frameworks like SvelteKit send large response headers
+    # (CSP nonces, Link preload headers, session cookies) that exceed the
+    # default 4KB and cause 502 Bad Gateway without this
+    proxy_buffer_size       32k;
+    proxy_buffers           8 32k;
+    proxy_busy_buffers_size 64k;
+
     # Static assets — no rate limit, cached
     location ~* \.(js|mjs|css|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf|eot|otf|webp|avif|map|webmanifest|pdf|mp4|webm|ogg|mp3|wav|zip)\$ {
         proxy_pass http://127.0.0.1:$APP_PORT;

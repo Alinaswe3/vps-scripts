@@ -115,7 +115,7 @@ Installs Nginx as a reverse proxy with SSL support.
 **What it configures:**
 - Nginx with version hidden (`server_tokens off`)
 - Security headers snippet (X-Frame-Options, Content-Type-Options, Referrer-Policy, Permissions-Policy — CSP is left to each app)
-- Proxy parameters snippet (WebSocket support, real IP forwarding, timeouts)
+- Proxy parameters snippet (WebSocket support, real IP forwarding, timeouts, response buffer sizing for large headers)
 - Certbot for free SSL certificates
 - Removes the default Nginx site
 
@@ -335,6 +335,16 @@ sudo ss -tlnp | grep <port>
 
 # Restart the app
 docker compose down && docker compose up -d --build
+```
+
+### I'm getting 502 Bad Gateway on some routes
+
+This usually means your app sends response headers that exceed nginx's default 4KB buffer — common with frameworks like SvelteKit or Next.js that include CSP nonces, `Link` preload headers for JS chunks, and session cookies. Re-run the nginx setup and regenerate your app's config:
+
+```bash
+sudo bash 03-nginx-setup.sh    # updates proxy-params.conf with larger buffers
+sudo bash 06-admin-tools.sh    # updates vps-nginx-config
+sudo vps-nginx-config           # regenerate your app's nginx config
 ```
 
 ### SSL certificate won't install

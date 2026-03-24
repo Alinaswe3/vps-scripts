@@ -163,14 +163,17 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 proxy_set_header X-Forwarded-Proto $scheme;
 proxy_cache_bypass $http_upgrade;
 
-# Timeouts — generous for file uploads and slow upstream responses
+# Timeouts — generous for file uploads, slow upstream responses,
+# and protected routes that do session validation + DB queries under load
 proxy_read_timeout 120s;
-proxy_connect_timeout 60s;
+proxy_connect_timeout 120s;
 proxy_send_timeout 120s;
 
-# Response buffer settings — prevents nginx from mangling upstream responses
+# Response buffer settings — sized for frameworks (SvelteKit, Next.js, etc.)
+# that send large response headers (CSP nonces, Link preload headers for
+# JS chunks, session cookies). Default 4KB causes 502 Bad Gateway.
 proxy_buffering on;
-proxy_buffer_size 16k;
+proxy_buffer_size 32k;
 proxy_buffers 8 32k;
 proxy_busy_buffers_size 64k;
 
