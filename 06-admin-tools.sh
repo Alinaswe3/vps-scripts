@@ -108,7 +108,7 @@ if install_cmd "vps-status"; then
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
 
 # Get server IP (works on VPS and VirtualBox)
-SERVER_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "unknown")
+SERVER_IP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "unknown")
 
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
@@ -600,7 +600,7 @@ else
     SERVER_NAME="$DOMAIN_NAME"
 
   else
-    SERVER_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "unknown")
+    SERVER_IP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "unknown")
     echo ""
     echo "Choose a public port for nginx to listen on."
     echo "  This is the port users visit in their browser (e.g. 8080)."
@@ -698,7 +698,7 @@ if [ "$ROUTE_TYPE" = "domain" ]; then
   echo ""
   read -p "Set up SSL (HTTPS) for $DOMAIN_NAME? (y/n): " SETUP_SSL
   if [ "$SETUP_SSL" = "y" ]; then
-    SERVER_IP=$(curl -s --max-time 5 ifconfig.me 2>/dev/null || echo "unknown")
+    SERVER_IP=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null || echo "unknown")
     echo ""
     echo -e "${YELLOW}[!!]${NC} Your domain's DNS A record must point to: $SERVER_IP"
     read -p "Is DNS already pointing to this server? (y/n): " DNS_READY

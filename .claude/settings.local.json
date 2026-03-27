@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -n \"d:/Code/Bash/vps-scripts/06-admin-tools.sh\")",
+      "Bash(bash -n \"d:/Code/Bash/vps-scripts/03-nginx-setup.sh\")",
+      "Bash(bash -n \"d:/Code/Bash/vps-scripts/04-deploy-app.sh\")"
+    ]
+  }
+}

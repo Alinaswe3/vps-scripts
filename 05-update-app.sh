@@ -38,7 +38,7 @@ get_server_ip() {
     echo "${ip:-localhost}"
     return
   fi
-  ip=$(curl -s --max-time 5 ifconfig.me 2>/dev/null) || true
+  ip=$(curl -4 -s --max-time 5 ifconfig.me 2>/dev/null) || true
   if [ -z "$ip" ]; then
     ip=$(hostname -I 2>/dev/null | awk '{print $1}') || true
   fi
