@@ -132,15 +132,17 @@ echo ""
 echo "  1) Image      — pull a new image tag from registry, restart"
 echo "  2) Env vars   — edit environment variables, restart containers"
 echo "  3) Both       — pull new image and update env vars"
+echo "  4) Branch     — switch the git branch this app is tracking, restart"
 echo ""
 
 while true; do
-  read -p "Select [1-3]: " UPDATE_TYPE
+  read -p "Select [1-4]: " UPDATE_TYPE
   case "$UPDATE_TYPE" in
-    1) UPDATE_CODE=true;  UPDATE_ENV=false; break ;;
-    2) UPDATE_CODE=false; UPDATE_ENV=true;  break ;;
-    3) UPDATE_CODE=true;  UPDATE_ENV=true;  break ;;
-    *) warn "Enter 1, 2, or 3." ;;
+    1) UPDATE_CODE=true;  UPDATE_ENV=false; UPDATE_BRANCH=false; break ;;
+    2) UPDATE_CODE=false; UPDATE_ENV=true;  UPDATE_BRANCH=false; break ;;
+    3) UPDATE_CODE=true;  UPDATE_ENV=true;  UPDATE_BRANCH=false; break ;;
+    4) UPDATE_CODE=false; UPDATE_ENV=false; UPDATE_BRANCH=true;  break ;;
+    *) warn "Enter 1, 2, 3, or 4." ;;
   esac
 done
 
@@ -339,6 +341,57 @@ if [ "$UPDATE_ENV" = true ]; then
       fi
     fi
   fi
+fi
+
+# =============================================================================
+# SWITCH BRANCH
+# =============================================================================
+if [ "$UPDATE_BRANCH" = true ]; then
+  section "Switching Branch"
+
+  CURRENT_BRANCH="${GIT_BRANCH:-unknown}"
+  echo "  Current branch : $CURRENT_BRANCH"
+  echo ""
+
+  # List remote branches so the user can see what's available
+  echo "  Available remote branches:"
+  git -C "$APP_DIR" fetch --all 2>/dev/null \
+    && git -C "$APP_DIR" branch -r 2>/dev/null \
+       | grep -v '\->' \
+       | sed 's|origin/||' \
+       | sed 's/^/    /' \
+    || warn "Could not list remote branches — check network access."
+  echo ""
+
+  read -p "  New branch name: " NEW_BRANCH
+  [ -z "$NEW_BRANCH" ] && error "Branch name cannot be empty."
+
+  if [ "$NEW_BRANCH" = "$CURRENT_BRANCH" ]; then
+    warn "Already on branch '$NEW_BRANCH'. Nothing to change."
+    exit 0
+  fi
+
+  echo ""
+  echo "Fetching and switching to '$NEW_BRANCH'..."
+
+  # Fetch latest from remote
+  git -C "$APP_DIR" fetch origin 2>&1 \
+    || error "git fetch failed. Check network access and repo permissions."
+
+  # Check the branch exists on remote
+  if ! git -C "$APP_DIR" ls-remote --exit-code --heads origin "$NEW_BRANCH" > /dev/null 2>&1; then
+    error "Branch '$NEW_BRANCH' does not exist on the remote."
+  fi
+
+  # Switch — use checkout -B to create local tracking branch if it doesn't exist
+  git -C "$APP_DIR" checkout -B "$NEW_BRANCH" "origin/$NEW_BRANCH" 2>&1 \
+    || error "Failed to switch to branch '$NEW_BRANCH'."
+
+  log "Switched to branch '$NEW_BRANCH' (commit: $(git -C "$APP_DIR" rev-parse --short HEAD))."
+
+  # Update .deploy-info so future updates track the new branch
+  sed -i "s/^GIT_BRANCH=.*/GIT_BRANCH=\"$NEW_BRANCH\"/" "$DEPLOY_INFO" 2>/dev/null || true
+  sed -i "s/^DEPLOYED_COMMIT=.*/DEPLOYED_COMMIT=\"$(git -C "$APP_DIR" rev-parse --short HEAD)\"/" "$DEPLOY_INFO" 2>/dev/null || true
 fi
 
 # =============================================================================
