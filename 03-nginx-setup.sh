@@ -129,11 +129,18 @@ if [ "${RECONFIG_HEADERS:-y}" = "y" ]; then
 # NOTE: Content-Security-Policy is NOT set here.
 # Each app sets its own CSP (with nonces, hashes, etc.) and nginx
 # passes it through untouched. Adding CSP here would conflict.
+#
+# NOTE: HSTS is included here. Certbot's --redirect flag strips the HTTP (port 80)
+# server block down to a bare 301 redirect, so this snippet ends up only in the
+# HTTPS (443) server block where HSTS is meaningful. Browsers that receive this
+# header will refuse to connect over plain HTTP for the next year, even if you
+# later remove the redirect — only add this once you are committed to HTTPS.
 
 add_header X-Frame-Options "SAMEORIGIN" always;
 add_header X-Content-Type-Options "nosniff" always;
 add_header Referrer-Policy "strict-origin-when-cross-origin" always;
 add_header Permissions-Policy "camera=(), microphone=(), geolocation=()" always;
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
 EOF
 
   log "Security headers snippet created at $HEADERS_SNIPPET"

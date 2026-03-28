@@ -102,7 +102,8 @@ Installs Docker Engine and Docker Compose plugin.
 - Docker Engine (latest)
 - Docker Compose plugin
 - Adds your user to the `docker` group
-- Hardens the Docker daemon (log rotation: 10MB x 3 files, no-new-privileges)
+- Hardens the Docker daemon (log rotation: 10MB x 3 files, no-new-privileges, DNS: 8.8.8.8 + 1.1.1.1)
+- Verifies DNS resolution works from inside a test container after setup
 
 **After running:** Log out and back in for the docker group to take effect.
 
@@ -114,12 +115,16 @@ Installs Nginx as a reverse proxy with SSL support.
 
 **What it configures:**
 - Nginx with version hidden (`server_tokens off`)
-- Security headers snippet (X-Frame-Options, Content-Type-Options, Referrer-Policy, Permissions-Policy — CSP is left to each app)
+- Security headers snippet (X-Frame-Options, Content-Type-Options, Referrer-Policy, Permissions-Policy, HSTS — CSP is left to each app)
 - Proxy parameters snippet (WebSocket support, real IP forwarding, timeouts, response buffer sizing for large headers)
 - Certbot for free SSL certificates
 - Removes the default Nginx site
 
 These snippets are reused automatically when you deploy apps.
+
+**HSTS (`Strict-Transport-Security`)** is included in the security headers snippet with `max-age=31536000; includeSubDomains`. Certbot's `--redirect` flag strips the HTTP (port 80) block down to a bare 301 redirect, so this header ends up only in the HTTPS (443) server block where it is meaningful. Once a browser sees this header it will refuse plain HTTP connections for one year — only enable SSL once you are committed to running HTTPS permanently.
+
+**Using Cloudflare DNS?** Set your A records to **DNS only (grey cloud)** before running `vps-nginx-config` with SSL. Certbot's HTTP-01 challenge requires traffic to reach your VPS directly on port 80. Once the certificate is installed you can re-enable the orange cloud (Cloudflare proxy) if you want, but note that Cloudflare will then terminate SSL at its edge and re-encrypt to your server — the certificate Certbot installed is still used for the Cloudflare→VPS leg.
 
 ---
 
@@ -140,6 +145,8 @@ Deploys any Dockerized app to your server. Supports multiple apps on the same VP
 - Finds all `docker-compose.yml` / `Dockerfile` candidates and lets you pick
 - Lets you paste your entire `.env` file in one go (CTRL+D to finish)
 - Detects private registry images and handles `docker login`
+
+**Compose file requirements:** Your production compose file must use `image:` for every service — do not include `build:` directives. The deploy script will offer to replace a `build:` with a registry image URL, but the cleanest approach is to maintain a separate `docker-compose.yml` (production, `image:` only) alongside your `docker-compose.dev.yml` (local, `build:` only). Services like `db`, `redis`, or `waha` that you don't build yourself should only have `image:` — never both `image:` and `build:` in the same service block.
 - Pulls images and starts containers with `docker compose up`
 - Saves deployment metadata for the update script
 
@@ -318,7 +325,7 @@ After running all scripts and deploying apps, your server looks like this:
 
 If you changed the SSH port and can't connect:
 - Connect via your VPS provider's web console (DigitalOcean, Hetzner, etc. all have one)
-- Edit `/etc/ssh/sshd_config.d/99-hardened.conf` and fix the port
+- Edit `/etc/ssh/sshd_config` and fix the `Port` line
 - Run `systemctl restart ssh`
 
 ### My app won't start
@@ -353,6 +360,11 @@ sudo vps-nginx-config           # regenerate your app's nginx config
 - DNS changes can take up to 48 hours to propagate (usually 5-30 minutes)
 - Run manually: `sudo certbot --nginx -d yourdomain.com`
 - Check with: `dig yourdomain.com` to verify DNS
+- **Cloudflare users:** temporarily set the A record to **DNS only (grey cloud)** before running certbot. The HTTP-01 challenge requires port 80 traffic to reach your VPS directly. Cloudflare's proxy (orange cloud) intercepts it and causes the challenge to fail. You can re-enable the orange cloud after the certificate is installed.
+
+### How do I force HTTPS and block plain HTTP?
+
+Run `sudo vps-nginx-config`, select your app, choose **Domain** routing, and say **yes** to SSL. Certbot will install a certificate and automatically add a 301 redirect from HTTP → HTTPS. The security headers snippet also sets `Strict-Transport-Security` (HSTS) so browsers enforce HTTPS on future visits without waiting for the redirect. No manual nginx editing is required.
 
 ### I need to roll back an update
 
