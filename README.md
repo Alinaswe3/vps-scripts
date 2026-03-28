@@ -39,6 +39,9 @@ sudo vps-nginx-config
 
 # 7. Run a security audit (optional)
 sudo bash 07-security-check.sh
+
+# 8. Protect a staging/test app with basic auth (optional)
+sudo bash 08-basic-auth.sh
 ```
 
 That's it. Your app is live.
@@ -56,6 +59,7 @@ That's it. Your app is live.
 | 05 | `05-update-app.sh` | Update a deployed app (code or env vars) | Requires a deployed app |
 | 06 | `06-admin-tools.sh` | Install admin utility commands | Recommends 01 + 02 |
 | 07 | `07-security-check.sh` | Full security audit of the server | None (best after 01-06) |
+| 08 | `08-basic-auth.sh` | Add/manage basic auth on any app | Requires nginx config for the app |
 
 All scripts are:
 - **Interactive** — they prompt you for everything, no flags to memorize
@@ -171,12 +175,11 @@ Updates a deployed app's code, environment variables, or both. Automatically bac
 
 **You'll be asked for:**
 - Which app to update (shows a list of deployed apps)
-- What to update: code, env vars, or both
+- What to update: image, env vars, both, or branch
 
-**For code updates:**
-- Pulls latest code from your git branch
-- Optionally change the Docker image tag (e.g. `latest` → `v2.0`)
-- Rebuilds and restarts containers
+**For image updates:**
+- Pulls latest image tag from registry (or a specific tag you choose)
+- Restarts containers
 - If the app fails to start → shows logs and offers to roll back
 
 **For env updates:**
@@ -184,6 +187,13 @@ Updates a deployed app's code, environment variables, or both. Automatically bac
 - Edit individual variables by number
 - Add new variables
 - Or paste a completely new `.env` file
+
+**For branch switches:**
+- Lists available remote branches
+- Validates the target branch exists on the remote before touching anything
+- Checks out the new branch and restarts containers
+- Rolls back if containers fail to start
+- Updates `.deploy-info` so future updates track the new branch
 
 **Backups are saved at:** `/home/<deploy-user>/apps/<app-name>/.backups/<timestamp>/`
 
@@ -222,6 +232,55 @@ Runs a comprehensive security audit of your server and reports findings as PASS,
 5. **File Permissions** — .env files, SSH keys, world-writable files, Docker socket
 
 Offers to install security updates if any are found.
+
+---
+
+### 08-basic-auth.sh — Basic Auth Management
+
+Protects a deployed app with an HTTP basic auth prompt — a username and password the browser shows before the page loads. Useful for staging and test environments you don't want the public to access.
+
+**Menu options:**
+1. **Enable** — installs `apache2-utils` if needed, creates the first user, patches the app's nginx config, reloads nginx
+2. **Add a user** — adds another credential to the same app
+3. **Remove a user** — deletes one credential, warns if none remain
+4. **List users** — shows all usernames (passwords are never shown)
+5. **Disable** — removes auth from nginx config and deletes all credentials
+
+**How it works:**
+
+Adds two lines to the app's `location /` block in nginx:
+```nginx
+auth_basic "Restricted Access";
+auth_basic_user_file /etc/nginx/.htpasswd-<app>;
+```
+Credentials are stored in `/etc/nginx/.htpasswd-<app>` using bcrypt. Each app gets its own credential file.
+
+**Typical usage for a test environment:**
+
+```bash
+sudo bash 08-basic-auth.sh
+# Select app: sptest
+# Action: 1) Enable
+# Username: admin
+# Password: (prompted by htpasswd)
+```
+
+From then on, `test.spotrev.net` shows a browser login prompt. To add a teammate:
+
+```bash
+sudo bash 08-basic-auth.sh
+# Select app: sptest
+# Action: 2) Add a user
+# Username: jane
+```
+
+**Reading `.deploy-info`:**
+
+Each deployed app stores metadata in a plain text file:
+```bash
+cat ~/apps/sptest/.deploy-info
+```
+This shows the app name, git repo, branch, compose file path, deploy user, deploy timestamp, last commit, nginx routing type, domain, and SSL status.
 
 ---
 
