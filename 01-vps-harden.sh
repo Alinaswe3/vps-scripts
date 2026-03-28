@@ -258,7 +258,21 @@ EOF
     sshd -t
   fi
 
-  # Restart SSH — service name varies by distro (ssh on Ubuntu, sshd on others)
+  # Ubuntu 24.04+ uses socket activation (ssh.socket) which overrides the Port
+  # in sshd_config. We must override the socket unit to use the custom port.
+  if systemctl list-units --type=socket --all 2>/dev/null | grep -q "ssh.socket"; then
+    log "Socket activation detected — overriding ssh.socket to port $SSH_PORT."
+    mkdir -p /etc/systemd/system/ssh.socket.d
+    cat > /etc/systemd/system/ssh.socket.d/override.conf << SOCKETEOF
+[Socket]
+ListenStream=
+ListenStream=$SSH_PORT
+SOCKETEOF
+    systemctl daemon-reload
+    systemctl restart ssh.socket
+  fi
+
+  # Restart SSH service — name varies by distro (ssh on Ubuntu, sshd on others)
   if systemctl is-active --quiet ssh 2>/dev/null; then
     systemctl restart ssh
   elif systemctl is-active --quiet sshd 2>/dev/null; then
@@ -274,6 +288,7 @@ EOF
   else
     warn "SSH does NOT appear to be listening on port $SSH_PORT!"
     warn "Check: sudo ss -tlnp | grep ssh"
+    warn "Check: sudo systemctl status ssh.socket"
     warn "Check: sudo sshd -t"
   fi
 
