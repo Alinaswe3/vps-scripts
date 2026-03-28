@@ -166,13 +166,15 @@ if [ "${RECONFIG_DAEMON:-y}" = "y" ]; then
     "max-size": "10m",
     "max-file": "3"
   },
-  "no-new-privileges": true
+  "no-new-privileges": true,
+  "dns": ["8.8.8.8", "1.1.1.1"]
 }
 EOF
 
   log "Docker daemon hardened."
   log "  Log rotation: 10MB x 3 files"
   log "  No new privileges: ENABLED"
+  log "  DNS servers: 8.8.8.8, 1.1.1.1"
 else
   log "Skipping daemon configuration."
 fi
@@ -181,6 +183,11 @@ fi
 systemctl enable docker > /dev/null 2>&1
 systemctl restart docker
 log "Docker service enabled and running."
+
+# Verify DNS works from inside a container
+docker run --rm alpine nslookup google.com > /dev/null 2>&1 \
+  && log "Docker DNS is working." \
+  || warn "Docker DNS may not be working — check /etc/docker/daemon.json"
 
 # =============================================================================
 # VERIFY INSTALLATION
