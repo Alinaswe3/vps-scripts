@@ -127,18 +127,19 @@ section "Step 2 — Action"
 echo "  App  : $APP_NAME"
 echo "  Auth : $([ "$AUTH_ENABLED" = true ] && echo 'ENABLED' || echo 'disabled')"
 echo ""
-echo "  1) Enable basic auth    (creates first user, patches nginx)"
+echo "  1) Enable basic auth     (creates first user, patches nginx)"
 echo "  2) Add a user"
-echo "  3) Remove a user"
-echo "  4) List users"
-echo "  5) Disable basic auth   (removes all credentials and nginx config)"
+echo "  3) Change a user's password"
+echo "  4) Remove a user"
+echo "  5) List users"
+echo "  6) Disable basic auth    (removes all credentials and nginx config)"
 echo ""
 
 while true; do
-  read -p "Select [1-5]: " ACTION
+  read -p "Select [1-6]: " ACTION
   case "$ACTION" in
-    1|2|3|4|5) break ;;
-    *) warn "Enter a number between 1 and 5." ;;
+    1|2|3|4|5|6) break ;;
+    *) warn "Enter a number between 1 and 6." ;;
   esac
 done
 
@@ -191,8 +192,9 @@ if [ "$ACTION" = "1" ]; then
     echo "  First user  : $BA_USER"
     echo "  Credentials : $HTPASSWD_FILE"
     echo ""
-    echo "  To add more users : sudo bash 08-basic-auth.sh  → option 2"
-    echo "  To disable        : sudo bash 08-basic-auth.sh  → option 5"
+    echo "  To add more users    : sudo bash 08-basic-auth.sh  → option 2"
+    echo "  To change a password : sudo bash 08-basic-auth.sh  → option 3"
+    echo "  To disable           : sudo bash 08-basic-auth.sh  → option 6"
     echo ""
     echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
     exit 0
@@ -212,28 +214,54 @@ if [ "$ACTION" = "2" ]; then
   read -p "  Username: " BA_USER
   [ -z "$BA_USER" ] && error "Username cannot be empty."
 
-  # Check if user already exists
+  # Reject if user already exists — use option 3 to change password
   if [ -f "$HTPASSWD_FILE" ] && grep -q "^${BA_USER}:" "$HTPASSWD_FILE" 2>/dev/null; then
-    warn "User '$BA_USER' already exists."
-    read -p "  Reset their password? (y/n): " RESET_PASS
-    [ "$RESET_PASS" != "y" ] && echo "Nothing changed." && exit 0
+    error "User '$BA_USER' already exists. Use option 3 to change their password."
   fi
 
-  # Add or update user (-B = bcrypt, no -c = append/update, not recreate)
+  # -B = bcrypt, no -c = append, not recreate
   htpasswd -B "$HTPASSWD_FILE" "$BA_USER" \
     || error "Failed to add user '$BA_USER'."
 
-  log "User '$BA_USER' added/updated."
+  log "User '$BA_USER' added."
 
   TOTAL=$(grep -c "^[^#]" "$HTPASSWD_FILE" 2>/dev/null || echo "?")
-  echo "  Total users in $APP_NAME: $TOTAL"
+  echo "  Total users for $APP_NAME: $TOTAL"
+  exit 0
+fi
+
+# =============================================================================
+# ACTION: CHANGE PASSWORD
+# =============================================================================
+if [ "$ACTION" = "3" ]; then
+  section "Change Password"
+
+  [ ! -f "$HTPASSWD_FILE" ] && error "No htpasswd file found for '$APP_NAME'. Enable auth first (option 1)."
+
+  echo "  Current users:"
+  grep "^[^#]" "$HTPASSWD_FILE" 2>/dev/null | cut -d: -f1 | sed 's/^/    /' \
+    || echo "    (none)"
+  echo ""
+
+  read -p "  Username: " BA_USER
+  [ -z "$BA_USER" ] && error "Username cannot be empty."
+
+  if ! grep -q "^${BA_USER}:" "$HTPASSWD_FILE" 2>/dev/null; then
+    error "User '$BA_USER' not found. Use option 2 to add them first."
+  fi
+
+  # -B = bcrypt, overwrites existing entry for this user
+  htpasswd -B "$HTPASSWD_FILE" "$BA_USER" \
+    || error "Failed to update password for '$BA_USER'."
+
+  log "Password updated for '$BA_USER'."
   exit 0
 fi
 
 # =============================================================================
 # ACTION: REMOVE USER
 # =============================================================================
-if [ "$ACTION" = "3" ]; then
+if [ "$ACTION" = "4" ]; then
   section "Removing User"
 
   [ ! -f "$HTPASSWD_FILE" ] && error "No htpasswd file found for '$APP_NAME'."
@@ -258,7 +286,7 @@ if [ "$ACTION" = "3" ]; then
   REMAINING=$(grep -c "^[^#]" "$HTPASSWD_FILE" 2>/dev/null || echo "0")
   if [ "$REMAINING" = "0" ]; then
     warn "No users remain. Basic auth is still enabled but no one can log in."
-    warn "Add a user (option 2) or disable auth (option 5)."
+    warn "Add a user (option 2) or disable auth entirely (option 6)."
   else
     echo "  Remaining users: $REMAINING"
   fi
@@ -268,7 +296,7 @@ fi
 # =============================================================================
 # ACTION: LIST USERS
 # =============================================================================
-if [ "$ACTION" = "4" ]; then
+if [ "$ACTION" = "5" ]; then
   section "Users for '$APP_NAME'"
 
   if [ ! -f "$HTPASSWD_FILE" ]; then
@@ -292,7 +320,7 @@ fi
 # =============================================================================
 # ACTION: DISABLE
 # =============================================================================
-if [ "$ACTION" = "5" ]; then
+if [ "$ACTION" = "6" ]; then
   section "Disabling Basic Auth"
 
   if [ "$AUTH_ENABLED" = false ]; then
@@ -328,7 +356,7 @@ if [ "$ACTION" = "5" ]; then
   echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   echo ""
   echo "  App '$APP_NAME' is now publicly accessible."
-  echo "  To re-enable: sudo bash 08-basic-auth.sh → option 1"
+  echo "  To re-enable : sudo bash 08-basic-auth.sh → option 1"
   echo ""
   echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
   exit 0

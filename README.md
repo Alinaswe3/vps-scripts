@@ -241,10 +241,11 @@ Protects a deployed app with an HTTP basic auth prompt — a username and passwo
 
 **Menu options:**
 1. **Enable** — installs `apache2-utils` if needed, creates the first user, patches the app's nginx config, reloads nginx
-2. **Add a user** — adds another credential to the same app
-3. **Remove a user** — deletes one credential, warns if none remain
-4. **List users** — shows all usernames (passwords are never shown)
-5. **Disable** — removes auth from nginx config and deletes all credentials
+2. **Add a user** — adds a new credential (rejects if username already exists)
+3. **Change a user's password** — updates the password for an existing user
+4. **Remove a user** — deletes one credential, warns if none remain
+5. **List users** — shows all usernames (passwords are never shown)
+6. **Disable** — removes auth directives from nginx config and deletes all credentials
 
 **How it works:**
 
