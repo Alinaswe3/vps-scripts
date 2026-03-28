@@ -56,7 +56,7 @@ That's it. Your app is live.
 | 02 | `02-docker-install.sh` | Install Docker + Compose | None (recommends 01) |
 | 03 | `03-nginx-setup.sh` | Install Nginx + Certbot with secure defaults | None (run before 04) |
 | 04 | `04-deploy-app.sh` | Deploy an app from a git repo | Requires 02 |
-| 05 | `05-update-app.sh` | Update a deployed app (code or env vars) | Requires a deployed app |
+| 05 | `05-update-app.sh` | Update a deployed app (image, env vars, or branch) | Requires a deployed app |
 | 06 | `06-admin-tools.sh` | Install admin utility commands | Recommends 01 + 02 |
 | 07 | `07-security-check.sh` | Full security audit of the server | None (best after 01-06) |
 | 08 | `08-basic-auth.sh` | Add/manage basic auth on any app | Requires nginx config for the app |
@@ -150,9 +150,10 @@ Deploys any Dockerized app to your server. Supports multiple apps on the same VP
 - Lets you paste your entire `.env` file in one go (CTRL+D to finish)
 - Detects private registry images and handles `docker login`
 
-**Compose file requirements:** Your production compose file must use `image:` for every service — do not include `build:` directives. The deploy script will offer to replace a `build:` with a registry image URL, but the cleanest approach is to maintain a separate `docker-compose.yml` (production, `image:` only) alongside your `docker-compose.dev.yml` (local, `build:` only). Services like `db`, `redis`, or `waha` that you don't build yourself should only have `image:` — never both `image:` and `build:` in the same service block.
 - Pulls images and starts containers with `docker compose up`
 - Saves deployment metadata for the update script
+
+**Compose file requirements:** Your production compose file must use `image:` for every service — do not include `build:` directives. The deploy script will offer to replace a `build:` with a registry image URL, but the cleanest approach is to maintain a separate `docker-compose.yml` (production, `image:` only) alongside your `docker-compose.dev.yml` (local, `build:` only). Services like `db`, `redis`, or `waha` that you don't build yourself should only have `image:` — never both `image:` and `build:` in the same service block.
 
 **Your app lives at:** `/home/<deploy-user>/apps/<app-name>/`
 
@@ -363,6 +364,7 @@ After running all scripts and deploying apps, your server looks like this:
   snippets/
     security-headers.conf   # Shared security headers
     proxy-params.conf       # Shared proxy settings
+  .htpasswd-myapp1          # Basic auth credentials (if enabled)
 
 /usr/local/bin/
   vps-status               # Admin commands
