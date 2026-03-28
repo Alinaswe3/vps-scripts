@@ -327,6 +327,9 @@ if grep -qE '^\s+build:' "$COMPOSE_FILENAME" 2>/dev/null; then
       # Replace build: directive with image: in the compose file
       # Works regardless of service name — finds the build: line and swaps it
       # Handles both simple (build: .) and multi-line (build:\n  context:\n  dockerfile:)
+      # 0. Remove any pre-existing image: line — avoids duplicate mapping key if the
+      #    compose file uses image: alongside build: to name the locally built image
+      sed -i '/^\s*image:\s*/d' "$COMPOSE_FILENAME"
       # 1. Replace "build: <value>" (simple form) with image:
       sed -i "s|^\(\s*\)build:\s*\S.*|\\1image: ${REGISTRY_IMAGE}|" "$COMPOSE_FILENAME"
       # 2. Replace "build:" (multi-line form) with image: and remove its children
