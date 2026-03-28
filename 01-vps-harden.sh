@@ -266,7 +266,8 @@ EOF
     cat > /etc/systemd/system/ssh.socket.d/override.conf << SOCKETEOF
 [Socket]
 ListenStream=
-ListenStream=$SSH_PORT
+ListenStream=0.0.0.0:$SSH_PORT
+ListenStream=[::]:$SSH_PORT
 SOCKETEOF
     systemctl daemon-reload
     systemctl restart ssh.socket
