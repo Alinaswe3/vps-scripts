@@ -800,15 +800,20 @@ if [ "$ROUTE_TYPE" = "domain" ]; then
       read -p "Email for SSL certificate notifications: " SSL_EMAIL
       [ -z "$SSL_EMAIL" ] && echo "Email required." && exit 1
 
-      echo "Running SSL verification (dry run)..."
-      if certbot --nginx -d "$DOMAIN_NAME" --non-interactive --agree-tos --email "$SSL_EMAIL" --dry-run 2>&1; then
-        echo "Installing SSL certificate..."
-        certbot --nginx -d "$DOMAIN_NAME" --non-interactive --agree-tos --email "$SSL_EMAIL" --redirect
+      # --dry-run is not valid with the --nginx plugin (only works with certonly/renew).
+      # certbot --nginx already validates DNS and ownership before issuing — if DNS
+      # is wrong it fails cleanly with a clear error. Works for any domain.
+      echo "Installing SSL certificate for $DOMAIN_NAME..."
+      if certbot --nginx -d "$DOMAIN_NAME" --non-interactive --agree-tos --email "$SSL_EMAIL" --redirect 2>&1; then
         echo -e "${GREEN}[OK]${NC} SSL installed. HTTPS is active."
         SSL_ACTIVE="true"
       else
-        echo -e "${YELLOW}[!!]${NC} SSL verification failed. DNS may not be pointing here yet."
-        echo "  Run later: sudo certbot --nginx -d $DOMAIN_NAME"
+        echo -e "${YELLOW}[!!]${NC} SSL installation failed."
+        echo "  Common causes:"
+        echo "    - DNS A record not pointing to this server yet"
+        echo "    - Cloudflare proxy (orange cloud) enabled — set to grey cloud first"
+        echo "  Verify DNS : dig $DOMAIN_NAME"
+        echo "  Run later  : sudo certbot --nginx -d $DOMAIN_NAME"
       fi
     else
       echo "  When DNS is ready, run: sudo certbot --nginx -d $DOMAIN_NAME"
