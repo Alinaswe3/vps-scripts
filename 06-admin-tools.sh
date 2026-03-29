@@ -1032,7 +1032,7 @@ if command -v docker &>/dev/null; then
       read -p "  Remove ALL unused images (keeps images used by running containers)? (y/n): " CLEAN_UNUSED
       if [ "$CLEAN_UNUSED" = "y" ]; then
         BEFORE=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
-        docker image prune -a -f 2>/dev/null || true
+        docker image prune -a -f --filter "until=24h" 2>/dev/null || true
         AFTER=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
         FREED=$((AFTER - BEFORE))
         [ "$FREED" -lt 0 ] && FREED=0
