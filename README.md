@@ -212,6 +212,7 @@ Installs helpful commands to `/usr/local/bin/` so they're available system-wide.
 | `vps-open-port` | `vps-open-port 8080` | Open a firewall port |
 | `vps-close-port` | `vps-close-port 8080` | Close a firewall port |
 | `vps-add-user` | `sudo vps-add-user john` | Add a system user (optional sudo, SSH, Docker access) |
+| `vps-remove-user` | `sudo vps-remove-user john` | Remove a system user (cleans SSH config, optionally deletes home directory) |
 | `vps-list-apps` | `vps-list-apps` | List all deployed apps with status, domain, port, and commit |
 | `vps-logs` | `vps-logs myapp` | Tail Docker logs for an app (live, last 100 lines) |
 | `vps-restart` | `vps-restart myapp` | Restart an app's containers |

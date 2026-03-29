@@ -25,6 +25,7 @@
 #   vps-open-port     — Open a UFW firewall port
 #   vps-close-port    — Close a UFW firewall port
 #   vps-add-user      — Add a system user with optional sudo + SSH
+#   vps-remove-user   — Remove a system user and clean up SSH config
 #   vps-list-apps     — List all deployed apps with status
 #   vps-logs          — Tail Docker logs for a deployed app
 #   vps-restart       — Restart a deployed app's containers
@@ -82,7 +83,8 @@ echo "  This script will install these commands:"
 echo "    vps-status      — Server health dashboard"
 echo "    vps-open-port   — Open a firewall port"
 echo "    vps-close-port  — Close a firewall port"
-echo "    vps-add-user    — Add a system user"
+echo "    vps-add-user    — Add a system user
+    vps-remove-user — Remove a system user"
 echo "    vps-list-apps   — List deployed apps"
 echo "    vps-logs        — View app logs"
 echo "    vps-restart      — Restart an app"
@@ -291,6 +293,97 @@ echo "  Docker: $(groups "$USERNAME" | grep -q docker && echo 'yes' || echo 'no'
 CMDEOF
   chmod +x /usr/local/bin/vps-add-user
   log "vps-add-user installed."
+fi
+
+# =============================================================================
+# VPS-REMOVE-USER
+# =============================================================================
+section "Installing: vps-remove-user"
+
+if install_cmd "vps-remove-user"; then
+  cat > /usr/local/bin/vps-remove-user << 'CMDEOF'
+#!/bin/bash
+# vps-remove-user — Remove a system user and optionally delete their home directory
+
+if [ "$EUID" -ne 0 ]; then
+  echo "Error: Must run as root. Use: sudo vps-remove-user <username>"
+  exit 1
+fi
+
+if [ -z "$1" ]; then
+  echo "Usage: sudo vps-remove-user <username>"
+  echo "Example: sudo vps-remove-user john"
+  exit 1
+fi
+
+USERNAME="$1"
+
+# Safety checks
+if ! id "$USERNAME" &>/dev/null; then
+  echo "Error: User '$USERNAME' does not exist."
+  exit 1
+fi
+
+# Refuse to remove system users
+UID_VAL=$(id -u "$USERNAME" 2>/dev/null)
+if [ "$UID_VAL" -lt 1000 ]; then
+  echo "Error: '$USERNAME' is a system user (UID $UID_VAL). Refusing to remove."
+  exit 1
+fi
+
+# Refuse to remove the only sudo user
+SUDO_USERS=$(getent group sudo 2>/dev/null | cut -d: -f4 | tr ',' ' ')
+SUDO_COUNT=$(echo "$SUDO_USERS" | wc -w)
+if echo "$SUDO_USERS" | grep -qw "$USERNAME" && [ "$SUDO_COUNT" -le 1 ]; then
+  echo "Error: '$USERNAME' is the only sudo user. Removing them would lock you out."
+  echo "Create another sudo user first with: sudo vps-add-user <newuser>"
+  exit 1
+fi
+
+echo ""
+echo "User to remove : $USERNAME"
+echo "Home directory : /home/$USERNAME"
+echo "Groups         : $(groups "$USERNAME" 2>/dev/null | cut -d: -f2 | xargs)"
+echo ""
+
+read -p "Are you sure you want to remove '$USERNAME'? (y/n): " CONFIRM
+[ "$CONFIRM" != "y" ] && echo "Aborted." && exit 0
+
+# Remove from AllowUsers in SSH config (both main config and drop-in)
+for sshcfg in /etc/ssh/sshd_config /etc/ssh/sshd_config.d/99-hardened.conf; do
+  if [ -f "$sshcfg" ] && grep -q "AllowUsers" "$sshcfg" 2>/dev/null; then
+    sed -i "s/\bAllowUsers\b.*/ $(grep "^AllowUsers" "$sshcfg" | sed "s/AllowUsers/AllowUsers/" | sed "s/\b$USERNAME\b//g" | sed 's/  */ /g')/" "$sshcfg" 2>/dev/null || true
+    # Clean up by rewriting AllowUsers line properly
+    sed -i "/^AllowUsers/{ s/\b${USERNAME}\b//g; s/  */ /g; s/ $//; }" "$sshcfg"
+    echo "Removed '$USERNAME' from AllowUsers in $sshcfg"
+  fi
+done
+
+# Reload SSH if the config was touched
+if systemctl is-active --quiet ssh 2>/dev/null; then
+  systemctl reload ssh 2>/dev/null || true
+elif systemctl is-active --quiet sshd 2>/dev/null; then
+  systemctl reload sshd 2>/dev/null || true
+fi
+
+# Kill any active sessions for this user
+loginctl terminate-user "$USERNAME" 2>/dev/null || true
+
+# Ask about home directory
+read -p "Delete home directory /home/$USERNAME? (y/n): " DELETE_HOME
+if [ "$DELETE_HOME" = "y" ]; then
+  userdel -r "$USERNAME" 2>/dev/null || userdel "$USERNAME"
+  echo "User '$USERNAME' and home directory removed."
+else
+  userdel "$USERNAME" 2>/dev/null
+  echo "User '$USERNAME' removed. Home directory kept at /home/$USERNAME."
+fi
+
+echo ""
+echo "Done. '$USERNAME' has been removed from the system."
+CMDEOF
+  chmod +x /usr/local/bin/vps-remove-user
+  log "vps-remove-user installed."
 fi
 
 # =============================================================================
