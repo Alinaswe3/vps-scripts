@@ -1027,10 +1027,12 @@ if command -v docker &>/dev/null; then
       echo ""
       echo -e "  ${YELLOW}[!!]${NC} There are also $UNUSED_COUNT images not used by any container."
       echo "  These may include old versions of your app images."
+      echo "  Note: only images older than 24 hours will be removed."
+      echo "  Images pulled recently are kept — re-run tomorrow to clean them."
       read -p "  Remove ALL unused images (keeps images used by running containers)? (y/n): " CLEAN_UNUSED
       if [ "$CLEAN_UNUSED" = "y" ]; then
         BEFORE=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
-        docker image prune -a -f --filter "until=24h" 2>/dev/null || true
+        docker image prune -a -f 2>/dev/null || true
         AFTER=$(df / --output=avail -B1 | tail -1 | tr -d ' ')
         FREED=$((AFTER - BEFORE))
         [ "$FREED" -lt 0 ] && FREED=0
