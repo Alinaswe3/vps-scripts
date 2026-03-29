@@ -103,10 +103,11 @@ Installs Docker Engine and Docker Compose plugin.
 - Which user should run Docker (your deploy user)
 
 **What it configures:**
+- Host DNS via `systemd-resolved` (8.8.8.8 + 1.1.1.1, fallback 9.9.9.9) — ensures the Docker daemon can reach registries like `ghcr.io`
 - Docker Engine (latest)
 - Docker Compose plugin
 - Adds your user to the `docker` group
-- Hardens the Docker daemon (log rotation: 10MB x 3 files, no-new-privileges, DNS: 8.8.8.8 + 1.1.1.1)
+- Hardens the Docker daemon (log rotation: 10MB x 3 files, no-new-privileges, container DNS: 8.8.8.8 + 1.1.1.1)
 - Verifies DNS resolution works from inside a test container after setup
 
 **After running:** Log out and back in for the docker group to take effect.

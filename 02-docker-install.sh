@@ -48,10 +48,11 @@ echo -e "${BLUE}  DOCKER INSTALLATION SCRIPT${NC}"
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
 echo "  This script will:"
-echo "    1. Install Docker Engine"
-echo "    2. Install Docker Compose plugin"
-echo "    3. Add a user to the docker group"
-echo "    4. Harden the Docker daemon"
+echo "    1. Configure host DNS (8.8.8.8, 1.1.1.1)"
+echo "    2. Install Docker Engine"
+echo "    3. Install Docker Compose plugin"
+echo "    4. Add a user to the docker group"
+echo "    5. Harden the Docker daemon"
 echo ""
 echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
@@ -62,7 +63,7 @@ read -p "Ready to begin? (y/n): " START_CONFIRM
 # =============================================================================
 # GATHER INFORMATION
 # =============================================================================
-section "Step 1/4 — Gathering Information"
+section "Step 1/5 — Gathering Information"
 
 # Detect non-root users to suggest
 AVAILABLE_USERS=$(awk -F: '$3 >= 1000 && $3 < 65534 {print $1}' /etc/passwd 2>/dev/null | tr '\n' ', ' | sed 's/,$//')
@@ -81,9 +82,41 @@ fi
 log "Docker will be configured for user '$DOCKER_USER'."
 
 # =============================================================================
+# HOST DNS CONFIGURATION
+# =============================================================================
+section "Step 2/4 — Configuring Host DNS"
+
+# The Docker daemon resolves registry hostnames (ghcr.io, docker.io, etc.)
+# using the host's systemd-resolved, not daemon.json. If resolved has no
+# upstream DNS configured it falls back to the VPS provider's resolver which
+# can be unreliable. Set 8.8.8.8 + 1.1.1.1 unconditionally so registry
+# access is reliable before Docker ever tries to reach the internet.
+
+RESOLVED_CONF="/etc/systemd/resolved.conf"
+
+if grep -q "^DNS=8.8.8.8" "$RESOLVED_CONF" 2>/dev/null; then
+  log "Host DNS already configured (8.8.8.8, 1.1.1.1)."
+else
+  # Uncomment or set DNS= and FallbackDNS= lines
+  sed -i 's/^#*DNS=.*/DNS=8.8.8.8 1.1.1.1/' "$RESOLVED_CONF"
+  sed -i 's/^#*FallbackDNS=.*/FallbackDNS=9.9.9.9/' "$RESOLVED_CONF"
+
+  systemctl restart systemd-resolved
+  log "Host DNS configured: 8.8.8.8, 1.1.1.1 (fallback: 9.9.9.9)"
+fi
+
+# Quick sanity check
+if nslookup ghcr.io > /dev/null 2>&1; then
+  log "Host DNS resolving correctly."
+else
+  warn "Host DNS check failed — registry access may not work."
+  warn "Check: systemctl status systemd-resolved"
+fi
+
+# =============================================================================
 # INSTALL DOCKER
 # =============================================================================
-section "Step 2/4 — Installing Docker Engine"
+section "Step 3/4 — Installing Docker Engine"
 
 if command -v docker &>/dev/null; then
   CURRENT_VERSION=$(docker --version 2>/dev/null)
@@ -112,7 +145,7 @@ fi
 # =============================================================================
 # INSTALL DOCKER COMPOSE PLUGIN
 # =============================================================================
-section "Step 3/4 — Installing Docker Compose Plugin"
+section "Step 4/5 — Installing Docker Compose Plugin"
 
 if docker compose version &>/dev/null; then
   CURRENT_COMPOSE=$(docker compose version 2>/dev/null)
@@ -146,7 +179,7 @@ fi
 # =============================================================================
 # HARDEN DOCKER DAEMON
 # =============================================================================
-section "Step 4/4 — Hardening Docker Daemon"
+section "Step 5/5 — Hardening Docker Daemon"
 
 DAEMON_CONFIG="/etc/docker/daemon.json"
 
