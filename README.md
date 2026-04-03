@@ -220,6 +220,7 @@ Installs helpful commands to `/usr/local/bin/` so they're available system-wide.
 | `vps-nginx-config` | `sudo vps-nginx-config` | Create or reset nginx reverse proxy for an app (domain or port routing, SSL) |
 | `vps-remove-app` | `sudo vps-remove-app` | Interactively remove a deployed app (stops containers, removes nginx config, deletes files, optionally revokes SSL) |
 | `vps-cleanup` | `sudo vps-cleanup` | Free disk space (Docker cache, unused images, old backups, journal logs, APT cache) |
+| `vps-sync` | `vps-sync` | Force app code on VPS to exactly match the remote git branch (discards local changes, keeps .env) |
 
 ---
 
@@ -379,6 +380,7 @@ After running all scripts and deploying apps, your server looks like this:
   vps-nginx-config
   vps-remove-app
   vps-cleanup
+  vps-sync
 ```
 
 ---

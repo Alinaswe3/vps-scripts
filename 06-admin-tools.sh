@@ -1296,6 +1296,129 @@ CMDEOF
 fi
 
 # =============================================================================
+# VPS-SYNC
+# =============================================================================
+section "Installing: vps-sync"
+
+if install_cmd "vps-sync"; then
+  cat > /usr/local/bin/vps-sync << 'CMDEOF'
+#!/bin/bash
+# vps-sync — Force app code on VPS to exactly match the remote git branch
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BLUE='\033[0;34m'; NC='\033[0m'
+
+log()  { echo -e "${GREEN}[OK]${NC} $*"; }
+warn() { echo -e "${YELLOW}[!!]${NC} $*"; }
+error(){ echo -e "${RED}[ERROR]${NC} $*"; exit 1; }
+
+DEPLOY_USER=$(awk -F: '$3 >= 1000 && $3 < 65534 && $6 ~ /^\/home/ {print $1; exit}' /etc/passwd)
+APPS_DIR="/home/$DEPLOY_USER/apps"
+
+# --- Pick app ---
+echo ""
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo -e "${BLUE}  SYNC APP WITH GITHUB${NC}"
+echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+echo ""
+
+APPS=()
+for dir in "$APPS_DIR"/*/; do
+  [ -f "${dir}.deploy-info" ] && APPS+=("$(basename "$dir")")
+done
+
+[ ${#APPS[@]} -eq 0 ] && error "No deployed apps found."
+
+if [ ${#APPS[@]} -eq 1 ]; then
+  APP_NAME="${APPS[0]}"
+  echo "App: $APP_NAME"
+else
+  echo "Deployed apps:"
+  for i in "${!APPS[@]}"; do
+    echo "  $((i+1))) ${APPS[$i]}"
+  done
+  echo ""
+  read -p "Select app: " NUM
+  [[ ! "$NUM" =~ ^[0-9]+$ ]] || [ "$NUM" -lt 1 ] || [ "$NUM" -gt ${#APPS[@]} ] && error "Invalid selection."
+  APP_NAME="${APPS[$((NUM-1))]}"
+fi
+
+APP_DIR="$APPS_DIR/$APP_NAME"
+source "$APP_DIR/.deploy-info" 2>/dev/null || error "Could not read .deploy-info for $APP_NAME."
+
+BRANCH="${GIT_BRANCH:-main}"
+COMPOSE_DIR="${COMPOSE_DIR:-$APP_DIR}"
+COMPOSE_FILENAME="${COMPOSE_FILENAME:-docker-compose.yml}"
+
+# --- Show what will happen ---
+echo ""
+echo "  App        : $APP_NAME"
+echo "  Directory  : $APP_DIR"
+echo "  Remote     : $GIT_URL"
+echo "  Branch     : $BRANCH"
+echo ""
+warn "This will DISCARD all local changes and untracked files in $APP_DIR."
+warn "Your .env file will NOT be touched."
+echo ""
+read -p "Continue? (y/n): " CONFIRM
+[ "$CONFIRM" != "y" ] && echo "Aborted." && exit 0
+
+# --- Fetch and reset ---
+echo ""
+echo "Fetching from remote..."
+cd "$APP_DIR" || error "Cannot cd to $APP_DIR"
+
+# Handle private repos — reuse stored credentials from GIT_URL if token embedded
+git fetch origin 2>&1 || error "git fetch failed. Check your network or repo credentials."
+
+BEFORE=$(git rev-parse HEAD 2>/dev/null)
+
+git reset --hard "origin/$BRANCH" 2>&1 || error "git reset failed."
+git clean -fd --exclude='.env' --exclude='.deploy-info' 2>&1
+
+AFTER=$(git rev-parse HEAD 2>/dev/null)
+
+echo ""
+if [ "$BEFORE" = "$AFTER" ]; then
+  log "Already up to date. No changes pulled."
+else
+  log "Synced to commit: $(git rev-parse --short HEAD)"
+  echo "  Previous : $(git rev-parse --short "$BEFORE" 2>/dev/null)"
+  echo "  Now      : $(git rev-parse --short "$AFTER" 2>/dev/null)"
+  echo ""
+  echo "  Changed files:"
+  git diff --name-only "$BEFORE" "$AFTER" 2>/dev/null | sed 's/^/    /'
+fi
+
+# --- Restart containers ---
+echo ""
+read -p "Restart containers to apply changes? (y/n): " RESTART
+if [ "$RESTART" = "y" ]; then
+  cd "$COMPOSE_DIR" || error "Cannot cd to $COMPOSE_DIR"
+  echo "Restarting containers..."
+  docker compose -f "$COMPOSE_FILENAME" up -d --build --remove-orphans 2>&1
+  sleep 2
+  if docker compose -f "$COMPOSE_FILENAME" ps 2>/dev/null | grep -qiE "up|running|healthy"; then
+    log "Containers are running."
+  else
+    warn "Containers may not be running — check logs:"
+    echo "  cd $COMPOSE_DIR && docker compose -f $COMPOSE_FILENAME logs --tail=50"
+  fi
+fi
+
+# --- Update deploy-info ---
+sed -i "s/^DEPLOYED_COMMIT=.*/DEPLOYED_COMMIT=\"$(git -C "$APP_DIR" rev-parse --short HEAD 2>/dev/null)\"/" "$APP_DIR/.deploy-info" 2>/dev/null || true
+sed -i "s/^DEPLOYED_AT=.*/DEPLOYED_AT=\"$(date -u +"%Y-%m-%d %H:%M:%S UTC")\"/" "$APP_DIR/.deploy-info" 2>/dev/null || true
+
+echo ""
+echo -e "${GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
+log "Sync complete."
+echo ""
+CMDEOF
+  chmod +x /usr/local/bin/vps-sync
+  log "vps-sync installed."
+fi
+
+# =============================================================================
 # DONE
 # =============================================================================
 echo ""
@@ -1315,6 +1438,7 @@ echo "  vps-restart <app>       Restart an app"
 echo "  sudo vps-nginx-config   Set up/reset nginx for an app"
 echo "  sudo vps-remove-app     Remove a deployed app"
 echo "  sudo vps-cleanup        Free disk space"
+echo "  vps-sync                Force app code to match GitHub"
 echo ""
 echo "  Try it now: vps-status"
 echo ""
