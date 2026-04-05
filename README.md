@@ -466,6 +466,30 @@ Every step asks for confirmation — nothing is deleted automatically. Volumes, 
 
 Just run `sudo bash 04-deploy-app.sh` again. Each app gets its own directory, Nginx config, and SSL certificate.
 
+### Nginx is showing its version number in error pages
+
+`03-nginx-setup.sh` sets `server_tokens off` in `nginx.conf`, but if the `sed` substitution didn't match (e.g. different comment format in your distro's config), the version may still leak. Fix it manually:
+
+```bash
+# Check current state
+grep "server_tokens" /etc/nginx/nginx.conf
+
+# Apply if missing
+sudo sed -i 's/# server_tokens off;/server_tokens off;/' /etc/nginx/nginx.conf
+
+# If that didn't work, add it directly inside the http block
+sudo grep -q "server_tokens off" /etc/nginx/nginx.conf || \
+  sudo sed -i '/http {/a \\tserver_tokens off;' /etc/nginx/nginx.conf
+
+# Reload
+sudo nginx -t && sudo systemctl reload nginx
+
+# Verify the Server header no longer shows version
+curl -I http://localhost 2>/dev/null | grep -i server
+```
+
+The `Server:` header should now show `nginx` with no version number.
+
 ### How do I check server security?
 
 Run `sudo bash 07-security-check.sh` for a full audit, or use `vps-status` for a quick health check.
